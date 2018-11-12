@@ -1,3 +1,1 @@
-# FlySkyIBus
-
-An Arduino library to decode the serial FlySky i-bus data received by the FlySky FS-iA6B receiver.
+Arduino code to read FlySky iBus comms. Adapted from: https://gitlab.com/timwilkinson/FlySkyIBus
