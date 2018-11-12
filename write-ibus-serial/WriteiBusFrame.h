@@ -11,7 +11,7 @@ class WriteiBusFrame { // will be merged with FlySkyIBus later
 public:
 	void begin(HardwareSerial& serial);
 	//void begin(Stream& stream);
-	void write(uint16_t *channel_data, HardwareSerial& serial);
+	void write(uint16_t *channel_data, uint8_t channel_count, HardwareSerial& serial);
 
 private:
 	static const uint8_t IBUS_FRAME_LENGTH = 0x20;	// iBus packet size (2 byte header, 14 channels x 2 bytes, 2 byte checksum)

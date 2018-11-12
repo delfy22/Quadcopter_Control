@@ -13,13 +13,11 @@ void WriteiBusFrame::begin(HardwareSerial& serial) {
 	serial.begin(115200);
 }
 
-void WriteiBusFrame::write(uint16_t *channel_data, HardwareSerial& serial) {
+void WriteiBusFrame::write(uint16_t *channel_data, uint8_t channel_count, HardwareSerial& serial) {
 
 	ibus_checksum = 0xFFFF;
 
 	buffer_index = 0;
-
-	uint8_t channel_count = sizeof(channel_data)/sizeof(channel_data[0]);
 
 	// Write the IBus buffer length
 	serial_buffer[buffer_index++] = IBUS_FRAME_LENGTH;
@@ -49,19 +47,12 @@ void WriteiBusFrame::write(uint16_t *channel_data, HardwareSerial& serial) {
 	serial_buffer[buffer_index++] = (ibus_checksum & 0xFF);
 	serial_buffer[buffer_index++] = ((ibus_checksum >> 8) & 0xFF);
 
-	// Display first two pieces of data being sent
-	//    Serial.println("I'm writing: ");
-	//    for (int i = 0; i < min(ppm_channel_count, IBUS_MAXCHANNELS); i++) {
-	//      Serial.println(serial_buffer[i+2]);
-	//      Serial.println(serial_buffer[i+3]);
-	//    }
 
-
-	// To debug the frame sent
-	//  int elementCount = sizeof(serial_buffer) / sizeof(serial_buffer[0]);
-	//  for(int i = 0; i<elementCount; i++) {
-	//    Serial.println(serial_buffer[i],HEX);
-	//  }
+  // To debug the frame sent
+//	  int elementCount = sizeof(serial_buffer) / sizeof(serial_buffer[0]);
+//	  for(int i = 0; i<elementCount; i++) {
+//	    Serial.println(serial_buffer[i],HEX);
+//	  }
 
 	// Write the buffer to the Serial pin
 	serial.write(serial_buffer, buffer_index);

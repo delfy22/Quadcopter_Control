@@ -5,7 +5,7 @@
 */
 #include "WriteiBusFrame.h"
 
-#define IBUS_MAXCHANNELS 14                                     // iBus has a maximum of 14 channels
+#define IBUS_MAXCHANNELS 14  // iBus has a maximum of 14 channels
 
 uint16_t *channel_data= new uint16_t[IBUS_MAXCHANNELS];
 
@@ -35,16 +35,20 @@ void loop() {
     }
   }
 
+  channel_data[1] = 1200;
+  channel_data[2] = 800;
+  channel_data[3] = 800;
+
   // Time the WriteSerial operation
-  time1 = micros();
-	// Write the IBus data to the Serial Port
-  iBus.write(channel_data, Serial1);
-  time2 = micros();
-  timediff = time2 - time1;
+//  time1 = micros();
+	// Write the IBus data to the specified Serial Port, note middle parameter is how many pieces of data are sent, if data is sent outside this number they will be defaulted to 1500
+  iBus.write(channel_data, 4, Serial1);
+//  time2 = micros();
+//  timediff = time2 - time1;
 
   // Display the time taken to WriteSerial
-  Serial.print("iBUS loop duration = ");
-  Serial.println(timediff);
+//  Serial.print("iBUS loop duration = ");
+//  Serial.println(timediff);
   
 	// Delay before sending next frame
 	delay(1000);
