@@ -125,6 +125,13 @@ void FlySkyIBus::write_one_frame(uint16_t *channel_data, uint8_t channel_count, 
 
 	// Write the IBus channel data to the buffer
 	for (int i = 0; i < min(channel_count, IBUS_MAX_CHANNELS); i++) {
+		//If attempting to send data out of limits then coerce into the limits
+		if (channel_data[i] < IBUS_LOWER_LIMIT) {
+			channel_data[i] = IBUS_LOWER_LIMIT;
+		}
+		else if (channel_data[i] > IBUS_UPPER_LIMIT) {
+			channel_data[i] = IBUS_UPPER_LIMIT;
+		}
 		serial_buffer[buffer_index++] = (channel_data[i] & 0xFF);
 		serial_buffer[buffer_index++] = ((channel_data[i] >> 8) & 0xFF);
 	}

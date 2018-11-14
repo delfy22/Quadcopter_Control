@@ -37,6 +37,8 @@ private:
 	static const uint8_t IBUS_MAX_CHANNELS = 14; // iBus has a maximum of 14 channels
 	static const uint8_t IBUS_COMMAND40 = 0x40;	// Command is always 0x40
 	static const uint16_t IBUS_DEFAULT_VALUE = 1500;  // Default value for a channel if not used is 1500 (0x05DC)
+	static const uint16_t IBUS_LOWER_LIMIT = 1000;	// Set limits for the data sent over iBus 
+	static const uint16_t IBUS_UPPER_LIMIT = 1900;	// Set limits for the data sent over iBus 
 
 	uint8_t state;
 	Stream* stream;

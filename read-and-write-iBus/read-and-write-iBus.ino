@@ -20,22 +20,48 @@ void setup() {
   pinMode (13, OUTPUT); // On-board LED
   Serial.begin(115200); // Serial Monitor
   iBus.begin(iBus_serial); // Open the iBus serial connection
-  channel_data[0] = 0; // Data to be written
-  channel_data[1] = 0; // Data to be written
 }
 
 void loop() {
-  channel_data[0] += 1; // Data to be written
-  channel_data[1] += 2; // Data to be written
-  channel_count = 2; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
+//  channel_data[0] += 1; // Roll control - default = 1500
+//  channel_data[1] += 2; // Pitch control - default = 1500
+//  channel_data[2] = 0; // Throttle control - default = 1000
+//  channel_data[3] = 1500; // Rudder control - default = 1500
+//  channel_data[4] = 1000; // Arming control - default = 1000, armed = 1500
+//  channel_data[5] = 1000; // Selectable control - default = 1000, second mode at 2000
+  channel_count = 6; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
 
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
 
   iBus.read_loop(); // Request one frame to be read
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 6; i++) {
     uint16_t data = iBus.readChannel(i); // Read one frame
-    Serial.println(data);
+    channel_data[i] = data;
+    switch (i) {
+      case 0:
+        Serial.print("Roll=");
+        break;
+      case 1:
+        Serial.print("Pitch=");
+        break;
+      case 2:
+        Serial.print("Throttle=");
+        break;
+      case 3:
+        Serial.print("Yaw=");
+        break;
+      case 4:
+        Serial.print("SWC=");
+        break;
+      case 5:
+        Serial.print("SWB=");
+        break;
+      default:
+        break;
+    }
+    Serial.print(data);
+    Serial.print(", ");
   }
   Serial.println();
-  delay(1000); // Set a delay between sending frames
+//  delay(500); // Set a delay between sending frames
 }
