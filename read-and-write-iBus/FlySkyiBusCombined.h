@@ -50,11 +50,9 @@ private:
 	uint16_t chksum;
 	uint8_t lchksum;
 
-	
-
 	uint8_t serial_buffer[IBUS_FRAME_LENGTH] = { 0 };
 	uint8_t buffer_index = 0;
-		uint16_t ibus_checksum;
+  uint16_t ibus_checksum;
 };
 
 extern FlySkyIBus iBus;
