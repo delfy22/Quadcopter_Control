@@ -1,13 +1,16 @@
 /*
   Code to read and write data using iBus protocol over one serial channel on Arduino. As iBus is one wire bidirectional, this could rx and tx to one iBus
   connection by placing a resistor between the rx and tx pins. Or, it could rx from one iBus connection and tx to another.
-  Note: On the Arduino Mega, Serial is TX0 and RX0 but is used by the USB serial connection too so will interfere with programming and cannot use the serial
-  monitor. Instead, use Serial1, 2, or 3.
+  Note: On the ESP32 devkit C, Serial is TX and RX but is used by the USB serial monitor. Instead Serial1 and 2 can be used by specifiying i in MySerial(i). 
+  Pin 10 isn't allowed for some reason so if using Serial1 the default is RX=9, TX=10 and the TX pin must be changed.
   iBus reading adapted from: https://gitlab.com/timwilkinson/FlySkyIBus
   iBus writing adapted from: https://github-mirror.open.netease.com/wdcossey/ppm-to-ibus-serial
 */
 
 #include "FlySkyiBusCombined.h"
+#include <HardwareSerial.h>
+
+HardwareSerial MySerial(2);
 
 #define IBUS_MAXCHANNELS 14  // iBus has a maximum of 14 channels
 #define IBUS_LOWER_LIMIT 1000
@@ -21,7 +24,7 @@ uint8_t out_of_bounds[6] = {0};
 uint8_t remote_lost = 0;
 unsigned long start_time;
 
-HardwareSerial& iBus_serial = Serial1; // Choose which serial port the iBus will be communicating over
+HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
 
 void set_safe_outputs (); // function prototype
 void set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw);
@@ -178,4 +181,3 @@ void planned_path () {
   Serial.print("Time is: ");
   Serial.println(time);
 }
-
