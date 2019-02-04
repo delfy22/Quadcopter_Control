@@ -6,9 +6,17 @@
   iBus reading adapted from: https://gitlab.com/timwilkinson/FlySkyIBus
   iBus writing adapted from: https://github-mirror.open.netease.com/wdcossey/ppm-to-ibus-serial
 */
+#define ROSSERIAL_ARDUINO_TCP_WIFI // Required to make the Wifi rosserial work for an ESP32
+//#define ESP32_USE_USB // To use USB comms, use this definition
 
 #include "FlySkyiBusCombined.h"
 #include <HardwareSerial.h>
+#include <ros.h>
+#include <std_msgs/MultiArrayLayout.h>
+#include <std_msgs/MultiArrayDimension.h>
+#include <std_msgs/Float32.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <WiFi.h>
 
 HardwareSerial MySerial(2);
 
@@ -29,13 +37,64 @@ HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus wil
 void set_safe_outputs (); // function prototype
 void set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw);
 
+/***************************************************************************************/
+/**************************Wifi stuff***************************************************/
+const char* ssid = "test"; // Wifi network name
+const char* password =  "abcdefg1"; // Wifi password
+IPAddress serverIp(10,42,0,1);      // rosserial socket ROSCORE SERVER IP address
+const uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
+
+void connectToNetwork() {
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) { // Wait until Wifi is connected
+    delay(1000);
+  }
+}
+/***************************************************************************************/
+
+/***************************************************************************************/
+/**************************ROS Stuff****************************************************/
+// Callback for subscriber, receives a 3 element Float32 array
+void sub_cb (const std_msgs::Float32MultiArray& data_rec) {
+  Serial.println();
+  Serial.println("Data from ROS: ");
+  
+  for (int i=0; i<3; i++) {
+    Serial.print (data_rec.data[i]);
+    Serial.print ("\t");
+  }
+  Serial.println();
+  Serial.println();
+}
+
+std_msgs::Float32 inc_data; 
+
+ros::Publisher data_pub("ESP_Data", &inc_data);
+
+ros::Subscriber<std_msgs::Float32MultiArray> data_sub("Pos_Data", &sub_cb); 
+
+ros::NodeHandle nh;
+/***************************************************************************************/
+
 void setup() {
+   connectToNetwork(); // Connect to the Wifi - uncomment for Wifi comms, comment for USB
+  
   pinMode (13, OUTPUT); // On-board LED
   Serial.begin(115200); // Serial Monitor
   iBus.begin(iBus_serial); // Open the iBus serial connection
 
   set_safe_outputs(); // Set all outputs to known safe values
   channel_count = 6; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
+
+  // Initalise node, advertise the pub and subscribe the sub
+  nh.initNode();
+  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
+  nh.advertise(data_pub);
+  nh.subscribe(data_sub);
+
+  inc_data.data = 0.0;
+  
   start_time = millis();
 }
 
@@ -79,6 +138,14 @@ void loop() {
   else {
     automated = 0;
   }
+/***************************************************************************************/
+
+/***************************************************************************************/
+/***********************************Receive ROS Data************************************/
+  data_pub.publish(&inc_data); // Set the data to be sent back to ROS.
+  nh.spinOnce(); // Send data and call subscriber callback to receive any data.
+
+  inc_data.data++;
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
