@@ -17,6 +17,7 @@
 #include <std_msgs/Float32.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <WiFi.h>
+#include "PID.h"
 
 HardwareSerial MySerial(2);
 
@@ -28,11 +29,12 @@ uint16_t *channel_data= new uint16_t[IBUS_MAXCHANNELS];
 uint8_t channel_count = 0;
 uint8_t automated = 0;
 uint8_t armed = 0;
-uint8_t out_of_bounds[6] = {0};
 uint8_t remote_lost = 0;
 unsigned long start_time;
 
 HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
+
+PID Pos_Ctrl; // Position controller object
 
 void set_safe_outputs (); // function prototype
 void set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw);
@@ -94,6 +96,8 @@ void setup() {
   nh.subscribe(data_sub);
 
   inc_data.data = 0.0;
+
+  // ************************Initialise PID controller
   
   start_time = millis();
 }
@@ -107,11 +111,7 @@ void loop() {
   // Check if any channels are out of bounds, this suggests that the controller has been lost
   for (uint8_t i = 0; i < channel_count; i++) {
     if (iBus.readChannel(i) < IBUS_LOWER_LIMIT || iBus.readChannel(i) > IBUS_UPPER_LIMIT) {
-      out_of_bounds[i] = 1;
       remote_lost = 1;
-    }
-    else {
-      out_of_bounds[i] = 0;
     }
   }
 
@@ -146,6 +146,15 @@ void loop() {
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
   inc_data.data++;
+  // Potentially update PID parameters via ROS, avoiding the need for reuploading
+/***************************************************************************************/
+
+
+/***************************************************************************************/
+/***************************************Read IMU****************************************/
+
+//****************** insert IMU code
+
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
@@ -183,12 +192,9 @@ void loop() {
   // If in automated mode, calculate our own channel values to send to FCU
   else if(automated) {
     // For automated control
-//    channel_data[2] = channel_data[2] + 1;
-//    if(channel_data[2] >= 1900) {
-//      channel_data[2] = 1000;
-//    }
-//    Serial.println(channel_data[2]);
-      planned_path();
+      //planned_path();
+
+    // **********************Call PID controller methods using current measured positions
   }
   // If we suspect the controller is lost, set all outputs to known safe values
   if (remote_lost) {
@@ -220,6 +226,8 @@ void set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw
   channel_data[5] = automated_sw; // Selectable control - default = 1000, second mode at 2000
 }
 
+
+//**************** convert to a sequence of positions
 void planned_path () {
   unsigned long current_time = millis();
   unsigned long time = current_time - start_time;
