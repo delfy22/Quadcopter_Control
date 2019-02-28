@@ -17,6 +17,10 @@
 #include <std_msgs/Float32.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
 
 HardwareSerial MySerial(2);
 
@@ -47,9 +51,14 @@ const uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore
 void connectToNetwork() {
   WiFi.begin(ssid, password);
 
+  Serial.println("Connecting...");
+
   while (WiFi.status() != WL_CONNECTED) { // Wait until Wifi is connected
+    Serial.println("Still Connecting...");
     delay(1000);
   }
+
+  Serial.println("Connected!");
 }
 /***************************************************************************************/
 
@@ -77,25 +86,41 @@ ros::Subscriber<std_msgs::Float32MultiArray> data_sub("Pos_Data", &sub_cb);
 ros::NodeHandle nh;
 /***************************************************************************************/
 
+/***************************************************************************************/
+/**************************IMU Stuff****************************************************/
+/* Set the delay between fresh samples */
+#define BNO055_SAMPLERATE_DELAY_MS (100)
+
+Adafruit_BNO055 bno = Adafruit_BNO055();
+
+unsigned long IMU_Read_Time;
+imu::Vector<3> euler;
+
+/***************************************************************************************/
 void setup() {
-   connectToNetwork(); // Connect to the Wifi - uncomment for Wifi comms, comment for USB
   
   pinMode (13, OUTPUT); // On-board LED
   Serial.begin(115200); // Serial Monitor
+  connectToNetwork(); // Connect to the Wifi - uncomment for Wifi comms, comment for USB
+
   iBus.begin(iBus_serial); // Open the iBus serial connection
 
   set_safe_outputs(); // Set all outputs to known safe values
   channel_count = 6; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
+
+  bno.begin();
+  bno.setExtCrystalUse(true);;
 
   // Initalise node, advertise the pub and subscribe the sub
   nh.initNode();
   nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
   nh.advertise(data_pub);
   nh.subscribe(data_sub);
-
+  
   inc_data.data = 0.0;
   
   start_time = millis();
+  IMU_Read_Time = start_time - BNO055_SAMPLERATE_DELAY_MS;
 }
 
 void loop() {
@@ -140,12 +165,24 @@ void loop() {
   }
 /***************************************************************************************/
 
+
+/***************************************************************************************/
+/************************************Read IMU Data**************************************/
+
+  if ((millis() - IMU_Read_Time) >= BNO055_SAMPLERATE_DELAY_MS) {
+    euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+  }
+//  Serial.print ("X = ");
+//  Serial.println (euler.x());
+/***************************************************************************************/
+
 /***************************************************************************************/
 /***********************************Receive ROS Data************************************/
+
+  inc_data.data = (float) euler.x();
   data_pub.publish(&inc_data); // Set the data to be sent back to ROS.
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
-  inc_data.data++;
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
