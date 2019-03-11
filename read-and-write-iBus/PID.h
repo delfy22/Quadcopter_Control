@@ -3,54 +3,41 @@
 
 class PID {
   public:
+    // Prototype to set and get desired values
+    void set_desired_values(float x_des, float y_des, float z_des, float yaw_des);
+    
     // Prototypes to set PID parameters
     void set_x_constants(float kp, float ki, float kd, float I_e, float D);
     void set_y_constants(float kp, float ki, float kd, float I_e, float D);
     void set_z_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_phi_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_psi_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_theta_constants(float kp, float ki, float kd, float I_e, float D);
+    void set_xspeed_constant(float kp);
+    void set_yspeed_constant(float kp);
+    void set_zspeed_constant(float kp);
+
+    // Prototypes to convert linear to angular
+    float compute_desired_pitch (float current_psi);
+    float compute_desired_roll (float current_psi);
 
     // Prototypes to calculate PID outputs
-    void compute_required_attitude (float current_psi);
-    void compute_x_PID (float current_x, float desired_x, float time_diff);
-    void compute_y_PID (float current_y, float desired_y, float time_diff);
-    float compute_z_PID (float current_z, float desired_z, float time_diff);
-    float compute_phi_PID (float current_phi, float time_diff);
-    float compute_theta_PID (float current_theta, float time_diff);
-    float compute_psi_PID (float current_psi, float desired_psi, float time_diff);
+    float compute_x_PID (float current_x, float time_diff);
+    float compute_y_PID (float current_y, float time_diff);
+    float compute_z_PID (float current_z, float time_diff);
+    float compute_xspeed_PID (float current_xspeed, float desired_xspeed, float time_diff);
+    float compute_yspeed_PID (float current_yspeed, float desired_yspeed, float time_diff);
+    float compute_zspeed_PID (float current_zspeed, float desired_zspeed, float time_diff);
     
 
   private:
 
     static constexpr float max_roll_angle = 8;
     static constexpr float max_tilt_angle = 8;
-    // PID Constants
-    float kp_phi;
-    float ki_phi;
-    float kd_phi; 
-    float I_e_phi;
-    float D_phi;
-    float old_phi;
-    float desired_phi;
-    float phi_output;
-    
-    float kp_theta;
-    float ki_theta;
-    float kd_theta;
-    float I_e_theta;
-    float D_theta;
-    float old_theta;
-    float desired_theta;
-    float theta_output;
-    
-    float kp_psi;
-    float ki_psi;
-    float kd_psi;
-    float I_e_psi;
-    float D_psi;
-    float old_psi;
-    float psi_output;
+    static constexpr float max_horiz_speed = 0.01; // Limit x and y speed to 0.01ms
+    static constexpr float max_vert_speed = 0.01; // Limit z speed to 0.01ms
+
+    float desired_x;
+    float desired_y;
+    float desired_z;
+    float desired_yaw;
     
     float kp_x;
     float ki_x;
@@ -75,5 +62,14 @@ class PID {
     float D_z;
     float old_z;
     float z_output;
+
+    float xspeed_output;
+    float kp_xspeed;
+
+    float yspeed_output;
+    float kp_yspeed;
+
+    float zspeed_output;
+    float kp_zspeed;
 };
 
