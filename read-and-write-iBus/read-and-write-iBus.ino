@@ -21,12 +21,15 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
+#include "PID.h"
 
 HardwareSerial MySerial(2);
 
 #define IBUS_MAXCHANNELS 14  // iBus has a maximum of 14 channels
 #define IBUS_LOWER_LIMIT 1000
 #define IBUS_UPPER_LIMIT 2000
+#define MIN_THRUST 1100
+#define PI 3.14159265
 
 uint16_t *channel_data= new uint16_t[IBUS_MAXCHANNELS];
 uint8_t channel_count = 0;
@@ -37,6 +40,11 @@ uint8_t remote_lost = 0;
 unsigned long start_time;
 
 HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
+PID positionController;
+
+unsigned long old_time = 0;
+
+float pidParams [3]; // = [0.0, 0.0, 0.0]
 
 void set_safe_outputs (); // function prototype
 void set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw);
@@ -72,6 +80,7 @@ void sub_cb (const std_msgs::Float32MultiArray& data_rec) {
   for (int i=0; i<3; i++) {
     Serial.print (data_rec.data[i]);
     Serial.print ("\t");
+    pidParams[i] = data_rec.data[i];
   }
   Serial.println();
   Serial.println();
@@ -97,6 +106,10 @@ unsigned long IMU_Read_Time;
 imu::Vector<3> euler;
 
 /***************************************************************************************/
+
+
+/***************************************************************************************/
+/******************************Setup****************************************************/
 void setup() {
   
   pinMode (13, OUTPUT); // On-board LED
@@ -112,17 +125,33 @@ void setup() {
   bno.setExtCrystalUse(true);;
 
   // Initalise node, advertise the pub and subscribe the sub
-  nh.initNode();
-  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
-  nh.advertise(data_pub);
-  nh.subscribe(data_sub);
+//  nh.initNode();
+//  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
+//  nh.advertise(data_pub);
+//  nh.subscribe(data_sub);
+//  
+//  inc_data.data = 0.0;
+
+  // Initialise PID Controllers
+  // Initialise with (kp,ki,kd,Ie,D)
+  positionController.set_x_constants(0,0,0,0,0);
+  positionController.set_y_constants(0,0,0,0,0);
+  positionController.set_z_constants(0,0,0,0,0);
   
-  inc_data.data = 0.0;
+  positionController.set_xspeed_constant(0);
+  positionController.set_yspeed_constant(0);
+  positionController.set_zspeed_constant(0);
+
+  old_time = micros();
   
   start_time = millis();
   IMU_Read_Time = start_time - BNO055_SAMPLERATE_DELAY_MS;
 }
+/***************************************************************************************/
 
+
+/***************************************************************************************/
+/**************************************Main Loop****************************************/
 void loop() {
   iBus.read_loop(); // Request one frame to be read
 
@@ -179,10 +208,21 @@ void loop() {
 /***************************************************************************************/
 /***********************************Receive ROS Data************************************/
 
-  inc_data.data = (float) euler.x();
-  data_pub.publish(&inc_data); // Set the data to be sent back to ROS.
-  nh.spinOnce(); // Send data and call subscriber callback to receive any data.
+//  inc_data.data = (float) euler.x();
+//  data_pub.publish(&inc_data); // Set the data to be sent back to ROS.
+//
+//  float oldParams[3];
+//  for (int i=0; i<3; i++) {
+//    oldParams[i] = pidParams[i];
+//  }
+//  
+//  nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
+//  if (pidParams != oldParams) {
+//    positionController.set_psi_constants(pidParams[0], pidParams[1], pidParams[2], 0, 0);
+//  }
+
+// can set desired positions received from ROS
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
@@ -219,14 +259,43 @@ void loop() {
   }
   // If in automated mode, calculate our own channel values to send to FCU
   else if(automated) {
-    // For automated control
-//    channel_data[2] = channel_data[2] + 1;
-//    if(channel_data[2] >= 1900) {
-//      channel_data[2] = 1000;
-//    }
-//    Serial.println(channel_data[2]);
-      planned_path();
+    
+    unsigned long current_time = micros();
+    unsigned long time_diff = current_time - old_time;
+
+    // for testing, replace with readings
+    float current_x = 0.0;
+    float current_y = 0.0;
+    float current_z = 0.0;
+    float current_xspeed = 0.0;
+    float current_yspeed = 0.0;
+    float current_zspeed = 0.0;
+    float current_pitch = 0.0;
+    float current_roll = 0.0;
+
+    // format (x, y, z, yaw)
+    positionController.set_desired_values(0.0, 0.0, 0.0, 0.0);
+    float desired_yaw = 0.0;
+    
+    // position controller inputs (current_pos, desired_pos, time_diff)
+    float xOutput = positionController.compute_x_PID(current_x, time_diff);
+    float yOutput = positionController.compute_y_PID(current_y, time_diff);
+    float zOutput = positionController.compute_z_PID(current_z, time_diff);
+
+    // speed controller inputs (current_speed, desired_speed, time_diff)
+    float xSpeedOutput = positionController.compute_xspeed_PID(current_xspeed, xOutput, time_diff);
+    float ySpeedOutput = positionController.compute_yspeed_PID(current_yspeed, yOutput, time_diff);
+    float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
+
+    // orientation conversion input (current angle) (desired angles taken from speed controllers already)
+    float pitchOutput = positionController.compute_desired_pitch(current_pitch);
+    float rollOutput = positionController.compute_desired_roll(current_roll);
+
+    set_outputs( rollOutput, pitchOutput, zOutput, desired_yaw, 1500, 2000 ); // last 2 values are armed and automated controls
+    
+    old_time = current_time;
   }
+  
   // If we suspect the controller is lost, set all outputs to known safe values
   if (remote_lost) {
     set_safe_outputs();
@@ -249,39 +318,39 @@ void set_safe_outputs () {
 }
 
 void set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw) {
-  channel_data[0] = roll; // Roll control - default = 1500
-  channel_data[1] = pitch; // Pitch control - default = 1500
-  channel_data[2] = throttle; // Throttle control - default = 1000
-  channel_data[3] = yaw; // Rudder control - default = 1500
-  channel_data[4] = arming_sw; // Arming control - default = 1000, armed = 1500
+  channel_data[0] = roll;         // Roll control - default = 1500
+  channel_data[1] = pitch;        // Pitch control - default = 1500
+  channel_data[2] = throttle;     // Throttle control - default = 1000
+  channel_data[3] = yaw;          // Rudder control - default = 1500
+  channel_data[4] = arming_sw;    // Arming control - default = 1000, armed = 1500
   channel_data[5] = automated_sw; // Selectable control - default = 1000, second mode at 2000
 }
 
-void planned_path () {
-  unsigned long current_time = millis();
-  unsigned long time = current_time - start_time;
-  if (time < 4000) {
-    set_safe_outputs();
-  }
-  else if (time < 8000) {
-    set_outputs (1500, 1500, 1200, 1500, 1500, 2000);
-  }
-  else if (time < 12000) {
-    set_outputs (1450, 1500, 1200, 1500, 1500, 2000);
-  }
-  else if (time < 16000) {
-    set_outputs (1500, 1500, 1200, 1500, 1500, 2000);
-  }
-  else if (time < 20000) {
-    set_outputs (1550, 1500, 1200, 1500, 1500, 2000);
-  }
-  else if (time < 24000) {
-    set_outputs (1500, 1500, 1200, 1500, 1500, 2000);
-  }
-  else {
-    set_safe_outputs();
-  }
-
-  Serial.print("Time is: ");
-  Serial.println(time);
-}
+//void planned_path () {
+//  unsigned long current_time = millis();
+//  unsigned long time = current_time - start_time;
+//  if (time < 4000) {
+//    set_safe_outputs();
+//  }
+//  else if (time < 8000) {
+//    set_outputs (1500, 1500, 1200, 1500, 1500, 2000);
+//  }
+//  else if (time < 12000) {
+//    set_outputs (1450, 1500, 1200, 1500, 1500, 2000);
+//  }
+//  else if (time < 16000) {
+//    set_outputs (1500, 1500, 1200, 1500, 1500, 2000);
+//  }
+//  else if (time < 20000) {
+//    set_outputs (1550, 1500, 1200, 1500, 1500, 2000);
+//  }
+//  else if (time < 24000) {
+//    set_outputs (1500, 1500, 1200, 1500, 1500, 2000);
+//  }
+//  else {
+//    set_safe_outputs();
+//  }
+//
+//  Serial.print("Time is: ");
+//  Serial.println(time);
+//}
