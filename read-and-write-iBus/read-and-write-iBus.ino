@@ -17,19 +17,19 @@
 #include <std_msgs/Float32.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <WiFi.h>
-#include <Wire.h>
+#include <Wire.h> // was for lcd?
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
 #include "PID.h"
 
-HardwareSerial MySerial(2);
 
 #define IBUS_MAXCHANNELS 14  // iBus has a maximum of 14 channels
 #define IBUS_LOWER_LIMIT 1000
 #define IBUS_UPPER_LIMIT 2000
 #define MIN_THRUST 1100
 #define PI 3.14159265
+#define BNO055_SAMPLERATE_DELAY_MS 20000 // Set the delay between fresh samples (in uS)
 
 uint16_t *channel_data= new uint16_t[IBUS_MAXCHANNELS];
 uint8_t channel_count = 0;
@@ -38,7 +38,10 @@ uint8_t armed = 0;
 uint8_t out_of_bounds[6] = {0};
 uint8_t remote_lost = 0;
 unsigned long start_time;
+bool displayStatus = 0;
 
+
+HardwareSerial MySerial(2);
 HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
 PID positionController;
 
@@ -86,9 +89,11 @@ void sub_cb (const std_msgs::Float32MultiArray& data_rec) {
   Serial.println();
 }
 
-std_msgs::Float32 inc_data; 
+std_msgs::Float32 zacc_data;
+std_msgs::Float32 zvel_data; 
 
-ros::Publisher data_pub("ESP_Data", &inc_data);
+ros::Publisher data_pub_acc("ESP_Data_acc", &zacc_data);
+ros::Publisher data_pub_vel("ESP_Data_vel", &zvel_data);
 
 ros::Subscriber<std_msgs::Float32MultiArray> data_sub("Pos_Data", &sub_cb); 
 
@@ -97,13 +102,33 @@ ros::NodeHandle nh;
 
 /***************************************************************************************/
 /**************************IMU Stuff****************************************************/
-/* Set the delay between fresh samples */
-#define BNO055_SAMPLERATE_DELAY_MS (100)
-
 Adafruit_BNO055 bno = Adafruit_BNO055();
 
 unsigned long IMU_Read_Time;
-imu::Vector<3> euler;
+float velocities [3]; // holds [x vel, y vel, z vel]
+
+void setCalibrationOffsets() {
+  adafruit_bno055_offsets_t calibrationData;
+  
+  // Restore calibration data
+  calibrationData.accel_offset_x = 15;
+  calibrationData.accel_offset_y = -9;
+  calibrationData.accel_offset_z = -25;
+  
+  calibrationData.mag_offset_x = 1135;
+  calibrationData.mag_offset_y = 206;
+  calibrationData.mag_offset_z = -1741;
+  
+  calibrationData.gyro_offset_x = 0;
+  calibrationData.gyro_offset_y = -3;
+  calibrationData.gyro_offset_z = -3;
+  
+  calibrationData.accel_radius = 1000;
+  calibrationData.mag_radius = 769;
+
+  bno.setSensorOffsets(calibrationData);  
+}
+
 
 /***************************************************************************************/
 
@@ -112,7 +137,6 @@ imu::Vector<3> euler;
 /******************************Setup****************************************************/
 void setup() {
   
-  pinMode (13, OUTPUT); // On-board LED
   Serial.begin(115200); // Serial Monitor
   connectToNetwork(); // Connect to the Wifi - uncomment for Wifi comms, comment for USB
 
@@ -122,15 +146,26 @@ void setup() {
   channel_count = 6; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
 
   bno.begin();
-  bno.setExtCrystalUse(true);;
+  bno.setExtCrystalUse(true);
+  setCalibrationOffsets();
+  // Set IMU mode to nine degrees of freedom (found in BN055 datasheet)
+  Adafruit_BNO055::adafruit_bno055_opmode_t mode;
+  mode = Adafruit_BNO055::OPERATION_MODE_NDOF;
+//  bno.setMode(mode);
 
+  velocities[0] = 0; // x vel
+  velocities[1] = 0; // y vel
+  velocities[2] = 0; // z vel
+  
   // Initalise node, advertise the pub and subscribe the sub
-//  nh.initNode();
-//  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
-//  nh.advertise(data_pub);
+  nh.initNode();
+  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
+  nh.advertise(data_pub_acc);
+  nh.advertise(data_pub_vel);
 //  nh.subscribe(data_sub);
 //  
-//  inc_data.data = 0.0;
+  zacc_data.data = 0.0;
+  zvel_data.data = 0.0;
 
   // Initialise PID Controllers
   // Initialise with (kp,ki,kd,Ie,D)
@@ -140,12 +175,14 @@ void setup() {
   
   positionController.set_xspeed_constant(0);
   positionController.set_yspeed_constant(0);
-  positionController.set_zspeed_constant(0);
+  positionController.set_zspeed_constant(0.1);
 
   old_time = micros();
   
-  start_time = millis();
+  start_time = micros();
   IMU_Read_Time = start_time - BNO055_SAMPLERATE_DELAY_MS;
+
+  Serial.println("Finished Setup");
 }
 /***************************************************************************************/
 
@@ -154,6 +191,8 @@ void setup() {
 /**************************************Main Loop****************************************/
 void loop() {
   iBus.read_loop(); // Request one frame to be read
+
+  // State Machine
 
 /***************************************************************************************/
 /**************************Safety checks and automation check***************************/
@@ -173,11 +212,11 @@ void loop() {
   if (!remote_lost) {
     if (iBus.readChannel(4) > 1100) {
       armed = 1;
-      Serial.println("Armed!");
+      if (displayStatus)  Serial.println("Armed!");
     }
     else {
       armed = 0;
-      Serial.println("Unarmed!");
+      if (displayStatus) Serial.println("Unarmed!");
     }
   }
 
@@ -185,7 +224,10 @@ void loop() {
   if (iBus.readChannel(5) > 1500 && !remote_lost && armed) {
     // If we're entering automated mode, take time.
     if (!automated) {
-      start_time = millis(); 
+      start_time = micros(); 
+      velocities[0] = 0; // DRONE'S X AXIS
+      velocities[1] = 0; // DRONE'S Y AXIS
+      velocities[2] = 0; // DRONE'S Y AXIS
     }
     automated = 1;
   }
@@ -197,26 +239,44 @@ void loop() {
 
 /***************************************************************************************/
 /************************************Read IMU Data**************************************/
+  imu::Vector<3> accels;
 
-  if ((millis() - IMU_Read_Time) >= BNO055_SAMPLERATE_DELAY_MS) {
-    euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+  unsigned long time_diff = micros() - IMU_Read_Time;
+
+//  if (time_diff >= BNO055_SAMPLERATE_DELAY_MS) {
+  if(true) {
+    // VECTOR_MAGNETOMETER (uT), VECTOR_GYROSCOPE (rps), VECTOR_EULER (deg)
+    // VECTOR_ACCELEROMETER (m/s^2), VECTOR_LINEARACCEL (m/s^2), VECTOR_GRAVITY (m/s^2)
+    accels = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    IMU_Read_Time = micros();
+
+    float temp_time = time_diff/1000000.0;
+    velocities[0] = velocities[0] + accels.x()*temp_time; // DRONE'S X AXIS
+    velocities[1] = velocities[1] + accels.y()*temp_time; // DRONE'S Y AXIS
+    velocities[2] = velocities[2] + accels.z()*temp_time;
+    
+    Serial.print ("Z = ");
+    Serial.println  (accels.z(), 4);
+    Serial.print ("Zvel = ");
+//    Serial.println (velocities[2], 4);
   }
-//  Serial.print ("X = ");
-//  Serial.println (euler.x());
 /***************************************************************************************/
 
 /***************************************************************************************/
 /***********************************Receive ROS Data************************************/
 
 //  inc_data.data = (float) euler.x();
-//  data_pub.publish(&inc_data); // Set the data to be sent back to ROS.
+  zacc_data.data = accels.z();
+  zvel_data.data = velocities[2];
+  data_pub_acc.publish(&zacc_data); // Set the data to be sent back to ROS.
+  data_pub_vel.publish(&zvel_data);
 //
 //  float oldParams[3];
 //  for (int i=0; i<3; i++) {
 //    oldParams[i] = pidParams[i];
 //  }
 //  
-//  nh.spinOnce(); // Send data and call subscriber callback to receive any data.
+  nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
 //  if (pidParams != oldParams) {
 //    positionController.set_psi_constants(pidParams[0], pidParams[1], pidParams[2], 0, 0);
@@ -230,38 +290,40 @@ void loop() {
     for (uint8_t i = 0; i < channel_count; i++) {
       uint16_t read_data = iBus.readChannel(i); // Read one frame
       channel_data[i] = read_data;
-      switch (i) {
-        case 0:
-          Serial.print("Roll=");
-          break;
-        case 1:
-          Serial.print("Pitch=");
-          break;
-        case 2:
-          Serial.print("Throttle=");
-          break;
-        case 3:
-          Serial.print("Yaw=");
-          break;
-        case 4:
-          Serial.print("SWC=");
-          break;
-        case 5:
-          Serial.print("SWB=");
-          break;
-        default:
-          break;
+      if (displayStatus) {
+        switch (i) {
+          case 0:
+            Serial.print("Roll=");
+            break;
+          case 1:
+            Serial.print("Pitch=");
+            break;
+          case 2:
+            Serial.print("Throttle=");
+            break;
+          case 3:
+            Serial.print("Yaw=");
+            break;
+          case 4:
+            Serial.print("SWC=");
+            break;
+          case 5:
+            Serial.print("SWB=");
+            break;
+          default:
+            break;
+        }
+        Serial.print(read_data);
+        Serial.print(", ");
       }
-      Serial.print(read_data);
-      Serial.print(", ");
     }
-    Serial.println();
+    if (displayStatus)  Serial.println();
   }
   // If in automated mode, calculate our own channel values to send to FCU
   else if(automated) {
     
     unsigned long current_time = micros();
-    unsigned long time_diff = current_time - old_time;
+    time_diff = current_time - old_time; // micros() time overflows after 70 mins but this difference will still be correct as it also overflows
 
     // for testing, replace with readings
     float current_x = 0.0;
@@ -285,7 +347,11 @@ void loop() {
     // speed controller inputs (current_speed, desired_speed, time_diff)
     float xSpeedOutput = positionController.compute_xspeed_PID(current_xspeed, xOutput, time_diff);
     float ySpeedOutput = positionController.compute_yspeed_PID(current_yspeed, yOutput, time_diff);
-    float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
+//    float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
+    float zSpeedOutput = positionController.compute_zspeed_PID(velocities[2], 1, time_diff);
+
+    Serial.print("z PID output: ");
+//    Serial.println(zSpeedOutput, 4);
 
     // orientation conversion input (current angle) (desired angles taken from speed controllers already)
     float pitchOutput = positionController.compute_desired_pitch(current_pitch);
@@ -299,12 +365,12 @@ void loop() {
   // If we suspect the controller is lost, set all outputs to known safe values
   if (remote_lost) {
     set_safe_outputs();
-    Serial.println("Entering Safe State");
+    if (displayStatus) Serial.println("Entering Safe State");
   }
   
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
   
-  delay(1); // Set a delay between sending frames
+  delay(20); // Set a delay between sending frames
 }
 
 

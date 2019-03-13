@@ -153,13 +153,6 @@ void FlySkyIBus::write_one_frame(uint16_t *channel_data, uint8_t channel_count, 
 	serial_buffer[buffer_index++] = (ibus_checksum & 0xFF);
 	serial_buffer[buffer_index++] = ((ibus_checksum >> 8) & 0xFF);
 
-
-//	 // To debug the frame sent
-//		  int elementCount = sizeof(serial_buffer) / sizeof(serial_buffer[0]);
-//		  for(int i = 0; i<elementCount; i++) {
-//		    Serial.println(serial_buffer[i],HEX);
-//		  }
-
 	// Write the buffer to the Serial pin
 	serial.write(serial_buffer, buffer_index);
 	buffer_index = 0;
