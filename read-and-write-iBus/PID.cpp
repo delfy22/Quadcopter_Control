@@ -132,16 +132,18 @@ float PID::compute_z_PID (float current_z, float time_diff) {
 // Speed controllers
 
 float PID::compute_xspeed_PID (float current_xspeed, float desired_xspeed, float time_diff) {
+  // Limit speed
+  if (desired_xspeed > max_horiz_speed)
+    desired_xspeed = max_horiz_speed;
+  else if (desired_xspeed < -max_horiz_speed)
+    desired_xspeed = -max_horiz_speed;
+  
   // Compute Error
   float e_xspeed = desired_xspeed - current_xspeed;
   // Compute PID Output
   xspeed_output = e_xspeed*kp_xspeed;
 
-  // Limit speed
-  if (xspeed_output > max_horiz_speed)
-    xspeed_output = max_horiz_speed;
-  else if (xspeed_output < -max_horiz_speed)
-    xspeed_output = -max_horiz_speed;
+//  Serial.print("xspeedError = "); Serial.println(e_xspeed);
 
   // Return the PID output
   return xspeed_output;
