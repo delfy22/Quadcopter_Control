@@ -31,8 +31,8 @@ class PID {
 
     static constexpr float max_roll_angle = 8;
     static constexpr float max_tilt_angle = 8;
-    static constexpr float max_horiz_speed = 0.01; // Limit x and y speed to 0.01ms
-    static constexpr float max_vert_speed = 0.01; // Limit z speed to 0.01ms
+    static constexpr float max_horiz_speed = 0.2; // Limit x and y speed to 0.01ms
+    static constexpr float max_vert_speed = 0.2; // Limit z speed to 0.01ms
 
     float desired_x;
     float desired_y;

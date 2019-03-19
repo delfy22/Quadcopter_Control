@@ -143,23 +143,24 @@ float PID::compute_xspeed_PID (float current_xspeed, float desired_xspeed, float
   // Compute PID Output
   xspeed_output = e_xspeed*kp_xspeed;
 
-//  Serial.print("xspeedError = "); Serial.println(e_xspeed);
+  Serial.print("xspeedError = "); Serial.println(e_xspeed);
 
   // Return the PID output
   return xspeed_output;
 }
 
 float PID::compute_yspeed_PID (float current_yspeed, float desired_yspeed, float time_diff) {
+  // Limit speed
+  if (desired_yspeed > max_horiz_speed)
+    desired_yspeed = max_horiz_speed;
+  else if (desired_yspeed < -max_horiz_speed)
+    desired_yspeed = -max_horiz_speed;
+    
   // Compute Error
   float e_yspeed = desired_yspeed - current_yspeed;
   // Compute PID Output
   yspeed_output = e_yspeed*kp_yspeed;
-  
-  // Limit speed
-  if (yspeed_output > max_horiz_speed)
-    yspeed_output = max_horiz_speed;
-  else if (yspeed_output < -max_horiz_speed)
-    yspeed_output = -max_horiz_speed;
+
 
   // Return the PID output
   return yspeed_output;
