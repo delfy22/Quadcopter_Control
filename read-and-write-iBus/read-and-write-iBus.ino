@@ -24,19 +24,20 @@
 #include "PID.h"
 
 
-#define IBUS_MAXCHANNELS 14  // iBus has a maximum of 14 channels
-#define IBUS_LOWER_LIMIT 1000
-#define IBUS_UPPER_LIMIT 2000
-#define MIN_THRUST 1100
-#define IMU_SAMPLE_TIME 20000 // Set the delay between fresh samples (in uS)
-#define CF_SAMPLE_TIME 50000
+#define IBUS_MAXCHANNELS  14  // iBus has a maximum of 14 channels
+#define IBUS_LOWER_LIMIT  1000
+#define IBUS_UPPER_LIMIT  2000
+#define MIN_THRUST        1100
+#define IMU_SAMPLE_TIME   20000 // Set the delay between fresh samples (in uS)
+#define CF_SAMPLE_TIME    50000
+#define MAX_SPEED         0.5 // If any speeds are above threshold, kill the drone for safety
 
 HardwareSerial MySerial(2);
 HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
 PID positionController;
 
-uint16_t* set_safe_outputs (uint16_t *channel_data_in); // function prototype
-uint16_t* set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw, uint16_t *channel_data_in);
+static uint16_t* set_safe_outputs (uint16_t *channel_data_in); // function prototype
+static uint16_t* set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw, uint16_t *channel_data_in);
 
 /***************************************************************************************/
 /**************************Wifi stuff***************************************************/
@@ -59,20 +60,23 @@ void connectToNetwork() {
 
 /***************************************************************************************/
 /**************************ROS Stuff****************************************************/
-std_msgs::Float32 CF_xVel;
+static float CF_Vel [3];
 
 // Callback for subscriber
 void sub_cb_loco (const std_msgs::Float32MultiArray& data_rec) {
-  CF_xVel.data = data_rec.data[0];
+  CF_Vel[0] = data_rec.data[0];
+  CF_Vel[1] = data_rec.data[1];
+  CF_Vel[2] = data_rec.data[2];
 }
 
 void sub_cb_tuning (const std_msgs::Float32& data_rec) {
   positionController.set_xspeed_constant(data_rec.data);
+//  positionController.set_yspeed_constant(data_rec.data);
 }
 
-std_msgs::Float32 testRunning;
-std_msgs::Float32 xvel_data; 
-std_msgs::Float32 xspeedpid_data; 
+static std_msgs::Float32 testRunning;
+static std_msgs::Float32 xvel_data; 
+static std_msgs::Float32 xspeedpid_data; 
 
 ros::Publisher data_pub_testing("Testing_Data", &testRunning);
 ros::Publisher data_pub_vel("ESP_Data_vel", &xvel_data);
@@ -88,11 +92,9 @@ ros::NodeHandle nh;
 /**************************IMU Stuff****************************************************/
 Adafruit_BNO055 bno = Adafruit_BNO055();
 
-unsigned long IMU_Read_Time;
-float velocities [3]; // holds [x vel, y vel, z vel]
-// Implement exponential moving average filtering on x, y, z accelerations
-
-float desired_xspeed = 0;
+static unsigned long IMU_Read_Time;
+static float velocities [3]; // holds [x vel, y vel, z vel]
+static float desired_xspeed = 0;
 
 void setCalibrationOffsets() {
   adafruit_bno055_offsets_t calibrationData;
@@ -186,12 +188,15 @@ void setup() {
   // Set IMU mode to nine degrees of freedom (found in BN055 datasheet)
   bno.setMode(Adafruit_BNO055::OPERATION_MODE_NDOF);
 
-  velocities[0] = 0; // x vel
-  velocities[1] = 0; // y vel
-  velocities[2] = 0; // z vel
+  velocities[0] = 0.0; // x vel
+  velocities[1] = 0.0; // y vel
+  velocities[2] = 0.0; // z vel
+  CF_Vel[0] = 0.0;
+  CF_Vel[1] = 0.0;
+  CF_Vel[2] = 0.0;
   
   // Initalise node, advertise the pub and subscribe the sub
-  IPAddress serverIp(10,42,0,61);      // rosserial socket ROSCORE SERVER IP address
+  IPAddress serverIp(10,42,0,61);      // rosserial socket ROSCORE SERVER IP address 
   const uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
   nh.initNode();
   nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
@@ -224,27 +229,31 @@ void setup() {
 /***************************************************************************************/
 /**************************************Main Loop****************************************/
 void loop() {
+  
   static unsigned long start_time = micros();
   static unsigned long old_time = micros();
   static unsigned long IMU_Read_Time = start_time - IMU_SAMPLE_TIME;
   static unsigned long CF_Read_Time = start_time - CF_SAMPLE_TIME;
   static unsigned long time_diff = 0;
   
-  iBus.read_loop(); // Request one frame to be read
-
-  // State Machine
-
   static uint8_t channel_count = 6;
-  static uint16_t *channel_data= new uint16_t[channel_count];
+  static uint16_t *channel_data = new uint16_t[channel_count];
+
+  static bool automated = 0;
+  static bool armed = 0;
+  static bool remote_lost = 0;
+  static bool displayStatus = 0; // 0 for no serial output about controller values, 1 for information
+
+  remote_lost = 0;
+
+  // Request one frame to be read
+  if (iBus.read_loop() == 1) {
+    if (displayStatus) Serial.println("lost"); 
+    remote_lost = 1;
+  }
   
 /***************************************************************************************/
 /**************************Safety checks and automation check***************************/
-
-  bool automated = 0;
-  bool armed = 0;
-  bool remote_lost = 0;
-  bool displayStatus = 0;
-  
   // Check if any channels are out of bounds, this suggests that the controller has been lost
   for (uint8_t i = 0; i < channel_count; i++) {
     if (iBus.readChannel(i) < IBUS_LOWER_LIMIT || iBus.readChannel(i) > IBUS_UPPER_LIMIT) {
@@ -277,12 +286,18 @@ void loop() {
   }
 /***************************************************************************************/
 
+/***************************************************************************************/
+/************************************Read CF Data***************************************/
+// Correct IMU velocities using readings from the crazyflie
+// NOTE: maybe use flags to see if data has changed?
 time_diff = micros() - CF_Read_Time;
 
 if (time_diff > CF_SAMPLE_TIME) {
-  velocities[0] = CF_xVel.data;
+  velocities[0] = CF_Vel[0];
+  velocities[1] = CF_Vel[1];
+  velocities[2] = CF_Vel[2];
 //  Serial.print("\n CF Data: ");
-//  Serial.println(CF_xVel.data, 4);
+//  Serial.println(CF_Vel[0], 4);
   CF_Read_Time = micros();
 }
 
@@ -295,24 +310,26 @@ if (time_diff > CF_SAMPLE_TIME) {
   }
   else {
     desired_xspeed = 0;
-    velocities[0] = 0; // DRONE'S X AXIS
-    velocities[1] = 0; // DRONE'S Y AXIS
-    velocities[2] = 0; // DRONE'S Z AXIS
+//    velocities[0] = 0; // DRONE'S X AXIS
+//    velocities[1] = 0; // DRONE'S Y AXIS
+//    velocities[2] = 0; // DRONE'S Z AXIS
     testRunning.data = 0;
   }
-
-  time_diff = micros() - IMU_Read_Time;
 
   static EMA myEMA(0.8);
   static imu::Vector<3> accels;
   static imu::Vector<3> orient;
 
+  // NOTE: try with no delay checking? Will IMU return any wrong readings? Is this causing issues?
+  time_diff = micros() - IMU_Read_Time;
   if(time_diff > IMU_SAMPLE_TIME) {
+    // Options for reading are:
     // VECTOR_MAGNETOMETER (uT), VECTOR_GYROSCOPE (rps), VECTOR_EULER (deg)
     // VECTOR_ACCELEROMETER (m/s^2), VECTOR_LINEARACCEL (m/s^2), VECTOR_GRAVITY (m/s^2)
-    orient = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-    accels = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
-    // Implement moving averages
+    orient = bno.getVector(Adafruit_BNO055::VECTOR_EULER); // Get IMU's Euler orientation
+    accels = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL); // Get linear accelerations with gravity accounted for
+    
+    // Implement moving average filter
     myEMA.setSx(accels.x());
     myEMA.setSy(accels.y());
     myEMA.setSz(accels.z());
@@ -325,9 +342,21 @@ if (time_diff > CF_SAMPLE_TIME) {
     velocities[1] = velocities[1] + (myEMA.getSy() + myEMA.getOldSy())*temp_time/2;
     velocities[2] = velocities[2] + (myEMA.getSz() + myEMA.getOldSz())*temp_time/2;
 
+    if (displayStatus) {
+      Serial.print("Velocities, [x, y, z] = \t");
+      Serial.print(velocities[0], 4); Serial.print(", \t"); 
+      Serial.print(velocities[1], 4); Serial.print(", \t");
+      Serial.print(velocities[2], 4); Serial.println(", \t");
+    }
+
     myEMA.updateOldValues();
     
     IMU_Read_Time = micros();
+  }
+  
+  if ( velocities[0] > MAX_SPEED || velocities[1] > MAX_SPEED || velocities[2] > MAX_SPEED ) {
+    remote_lost = 1; // If speeds are too high, assume the drone is lost and kill the power
+    armed = 0;
   }
 /***************************************************************************************/
 
@@ -349,6 +378,7 @@ if (time_diff > CF_SAMPLE_TIME) {
     for (uint8_t i = 0; i < channel_count; i++) {
       uint16_t read_data = iBus.readChannel(i); // Read one frame
       channel_data[i] = read_data;
+//      channel_data[i] = iBus.readChannel(i); // Read one frame
       if (displayStatus) {
         switch (i) {
           case 0:
@@ -407,6 +437,7 @@ if (time_diff > CF_SAMPLE_TIME) {
 //    float xSpeedOutput = positionController.compute_xspeed_PID(current_xspeed, xOutput, time_diff);
     float xSpeedOutput = positionController.compute_xspeed_PID(current_xspeed, desired_xspeed, time_diff);
     float ySpeedOutput = positionController.compute_yspeed_PID(current_yspeed, yOutput, time_diff);
+//    float ySpeedOutput = positionController.compute_yspeed_PID(current_yspeed, desired_xspeed, time_diff);
     float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
 
     xspeedpid_data.data = xSpeedOutput;    
@@ -434,10 +465,10 @@ if (time_diff > CF_SAMPLE_TIME) {
 
 //    set_outputs( rollOutput, pitchOutput, zOutput, desired_yaw, 1500, 2000 ); // last 2 values are armed and automated controls
     if (iBus.readChannel(4) > 1600) {
-      channel_data = set_outputs( iBus.readChannel(0), pitchOutput, iBus.readChannel(2), iBus.readChannel(3), 1500, 2000, channel_data ); // last 2 values are armed and automated controls
+      channel_data = set_outputs( iBus.readChannel(0), pitchOutput, iBus.readChannel(2), iBus.readChannel(3), 1500, 1000, channel_data ); // last 2 values are armed and automated controls
     }
     else {
-      channel_data = set_outputs( iBus.readChannel(0), iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), 1500, 2000, channel_data ); // last 2 values are armed and automated controls
+      channel_data = set_outputs( iBus.readChannel(0), iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), 1500, 1000, channel_data ); // last 2 values are armed and automated controls
     }
     
     old_time = current_time;
@@ -448,13 +479,15 @@ if (time_diff > CF_SAMPLE_TIME) {
     channel_data = set_safe_outputs(channel_data);
     if (displayStatus) Serial.println("Entering Safe State");
   }
-  
+
+  // NOTE: Should there be checks to ensure we're writing new data?
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
   
-  delay(1); // Set a delay between sending frames
+  delay(10); // Set a delay between sending frames
 }
 
-
+// NOTE: Do we need to return the array? If we pass in a pointer to the array and change variables at these memory locations then it is changing the original array.
+// NOTE: Set explicit size of the array pointer input?
 uint16_t* set_safe_outputs (uint16_t *channel_data_in) {
   channel_data_in[0] = 1500; // Roll control - default = 1500
   channel_data_in[1] = 1500; // Pitch control - default = 1500

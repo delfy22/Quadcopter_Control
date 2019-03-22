@@ -29,8 +29,11 @@ void FlySkyIBus::begin(Stream& stream)
 	this->lchksum = 0;
 }
 
-void FlySkyIBus::read_loop(void)
+bool FlySkyIBus::read_loop(void)
 {
+  bool noData = 1;
+  if (stream->available()) noData = 0;
+  
 	while (stream->available() > 0)
 	{
 		uint32_t now = millis();
@@ -98,6 +101,7 @@ void FlySkyIBus::read_loop(void)
 			break;
 		}
 	}
+ return noData;
 }
 
 uint16_t FlySkyIBus::readChannel(uint8_t channelNr)
