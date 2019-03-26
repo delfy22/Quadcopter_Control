@@ -10,8 +10,7 @@ void PID::set_desired_values(float x_des, float y_des, float z_des, float yaw_de
 
 // **************************************************************************************************
 // Set constants used by PID controllers
-void PID::set_x_constants(float kp, float ki, float kd, float I_e, float D)
-{
+void PID::set_x_constants(float kp, float ki, float kd, float I_e, float D) {
   kp_x = kp;
   ki_x = ki;
   kd_x = kd; 
@@ -19,8 +18,7 @@ void PID::set_x_constants(float kp, float ki, float kd, float I_e, float D)
   D_x = D;
 }
 
-void PID::set_y_constants(float kp, float ki, float kd, float I_e, float D)
-{
+void PID::set_y_constants(float kp, float ki, float kd, float I_e, float D) {
   kp_y = kp;
   ki_y = ki;
   kd_y = kd; 
@@ -28,8 +26,7 @@ void PID::set_y_constants(float kp, float ki, float kd, float I_e, float D)
   D_y = D;
 }
 
-void PID::set_z_constants(float kp, float ki, float kd, float I_e, float D)
-{
+void PID::set_z_constants(float kp, float ki, float kd, float I_e, float D) {
   kp_z = kp;
   ki_z = ki;
   kd_z = kd; 
@@ -37,19 +34,28 @@ void PID::set_z_constants(float kp, float ki, float kd, float I_e, float D)
   D_z = D;
 }
 
-void PID::set_xspeed_constant(float kp)
-{
+void PID::set_xspeed_constants(float kp, float ki, float kd, float I_e, float D) {
   kp_xspeed = kp;
+  ki_xspeed = ki;
+  kd_xspeed = kd;
+  I_e_xs = I_e;
+  D_xs = D;
 }
 
-void PID::set_yspeed_constant(float kp)
-{
+void PID::set_yspeed_constants(float kp, float ki, float kd, float I_e, float D) {
   kp_yspeed = kp;
+  ki_yspeed = ki;
+  kd_yspeed = kd;
+  I_e_ys = I_e;
+  D_ys = D;
 }
 
-void PID::set_zspeed_constant(float kp)
-{
+void PID::set_zspeed_constants(float kp, float ki, float kd, float I_e, float D) {
   kp_zspeed = kp;
+  ki_zspeed = ki;
+  kd_zspeed = kd;
+  I_e_zs = I_e;
+  D_zs = D;
 }
 
 // **************************************************************************************************
@@ -81,6 +87,21 @@ float PID::compute_desired_roll (float current_psi) {
 
 // **************************************************************************************************
 // Position controllers
+
+//float PID::compute_yaw_PID (float current_yaw, float time_diff) {
+//  // Compute Error
+//  float e_yaw = desired_yaw - current_yaw;
+//  // Compute Integral
+//  I_e_yaw = I_e_yaw + e_yaw*time_diff;
+//  // Compute Derivative
+//  D_yaw = (current_yaw - old_yaw)/time_diff;
+//  // Compute PID Output
+//  yaw_output = e_yaw*kp_yaw + ki_yaw*I_e_yaw - kd_yaw*D_yaw;
+//  // Update old_yaw
+//  old_yaw = current_yaw;
+//
+//  return yaw_output;
+//}
 
 float PID::compute_x_PID (float current_x, float time_diff) {
   // Compute Error
@@ -139,11 +160,22 @@ float PID::compute_xspeed_PID (float current_xspeed, float desired_xspeed, float
     desired_xspeed = -max_horiz_speed;
   
   // Compute Error
-  float e_xspeed = desired_xspeed - current_xspeed;
+  Serial.print("ki = "); Serial.print(ki_xspeed);
+  Serial.print("\ttime diff = "); Serial.print(time_diff,6);
+  float e_xs = desired_xspeed - current_xspeed;
+  Serial.print("\tE = "); Serial.print(e_xs,6);
+  // Compute Integral
+  I_e_xs = I_e_xs + e_xs*time_diff;
+  Serial.print("\tI = "); Serial.print(I_e_xs,4);
+  // Compute Derivative
+  D_xs = (current_xspeed - old_xspeed)/time_diff;
+  Serial.print("\tD = "); Serial.print(D_xs,4);
   // Compute PID Output
-  xspeed_output = e_xspeed*kp_xspeed;
-
-  Serial.print("xspeedError = "); Serial.println(e_xspeed);
+  xspeed_output = e_xs*kp_xspeed + ki_xspeed*I_e_xs - kd_xspeed*D_xs;
+  Serial.print("\tOut = "); Serial.println(xspeed_output,4);
+  // Update old_y
+  old_xspeed = current_xspeed;
+  
 
   // Return the PID output
   return xspeed_output;
@@ -155,28 +187,40 @@ float PID::compute_yspeed_PID (float current_yspeed, float desired_yspeed, float
     desired_yspeed = max_horiz_speed;
   else if (desired_yspeed < -max_horiz_speed)
     desired_yspeed = -max_horiz_speed;
-    
+  
   // Compute Error
-  float e_yspeed = desired_yspeed - current_yspeed;
+  float e_ys = desired_yspeed - current_yspeed;
+  // Compute Integral
+  I_e_ys = I_e_ys + e_ys*time_diff;
+  // Compute Derivative
+  D_ys = (current_yspeed - old_yspeed)/time_diff;
   // Compute PID Output
-  yspeed_output = e_yspeed*kp_yspeed;
-
+  yspeed_output = e_ys*kp_yspeed + ki_yspeed*I_e_ys - kd_yspeed*D_ys;
+  // Update old_y
+  old_yspeed = current_yspeed;
 
   // Return the PID output
   return yspeed_output;
 }
 
 float PID::compute_zspeed_PID (float current_zspeed, float desired_zspeed, float time_diff) {
-  // Compute Error
-  float e_zspeed = desired_zspeed - current_zspeed;
-  // Compute PID Output
-  zspeed_output = e_zspeed*kp_zspeed;
-
+  
   // Limit speed
   if (zspeed_output > max_vert_speed)
     zspeed_output = max_vert_speed;
   else if (zspeed_output < -max_vert_speed)
     zspeed_output = -max_vert_speed;
+  
+  // Compute Error
+  float e_zs = desired_zspeed - current_zspeed;
+  // Compute Integral
+  I_e_zs = I_e_zs + e_zs*time_diff;
+  // Compute Derivative
+  D_zs = (current_zspeed - old_zspeed)/time_diff;
+  // Compute PID Output
+  zspeed_output = e_zs*kp_zspeed + ki_zspeed*I_e_zs - kd_zspeed*D_zs;
+  // Update old_y
+  old_zspeed = current_zspeed;
 
   // Return the PID output
   return zspeed_output;

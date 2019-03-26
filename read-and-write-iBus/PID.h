@@ -10,15 +10,16 @@ class PID {
     void set_x_constants(float kp, float ki, float kd, float I_e, float D);
     void set_y_constants(float kp, float ki, float kd, float I_e, float D);
     void set_z_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_xspeed_constant(float kp);
-    void set_yspeed_constant(float kp);
-    void set_zspeed_constant(float kp);
+    void set_xspeed_constants(float kp, float ki, float kd, float I_e, float D);
+    void set_yspeed_constants(float kp, float ki, float kd, float I_e, float D);
+    void set_zspeed_constants(float kp, float ki, float kd, float I_e, float D);
 
     // Prototypes to convert linear to angular
     float compute_desired_pitch (float current_psi);
     float compute_desired_roll (float current_psi);
 
     // Prototypes to calculate PID outputs
+    float compute_yaw_PID (float current_yaw, float time_diff);
     float compute_x_PID (float current_x, float time_diff);
     float compute_y_PID (float current_y, float time_diff);
     float compute_z_PID (float current_z, float time_diff);
@@ -63,13 +64,28 @@ class PID {
     float old_z;
     float z_output;
 
-    float xspeed_output;
     float kp_xspeed;
+    float ki_xspeed;
+    float kd_xspeed;
+    float I_e_xs;
+    float D_xs;
+    float old_xspeed;
+    float xspeed_output;
 
-    float yspeed_output;
     float kp_yspeed;
+    float ki_yspeed;
+    float kd_yspeed;
+    float I_e_ys;
+    float D_ys;
+    float old_yspeed;
+    float yspeed_output;
 
-    float zspeed_output;
     float kp_zspeed;
+    float ki_zspeed;
+    float kd_zspeed;
+    float I_e_zs;
+    float D_zs;
+    float old_zspeed;
+    float zspeed_output;
 };
 
