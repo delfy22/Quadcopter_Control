@@ -160,19 +160,13 @@ float PID::compute_xspeed_PID (float current_xspeed, float desired_xspeed, float
     desired_xspeed = -max_horiz_speed;
   
   // Compute Error
-  Serial.print("ki = "); Serial.print(ki_xspeed);
-  Serial.print("\ttime diff = "); Serial.print(time_diff,6);
   float e_xs = desired_xspeed - current_xspeed;
-  Serial.print("\tE = "); Serial.print(e_xs,6);
   // Compute Integral
   I_e_xs = I_e_xs + e_xs*time_diff;
-  Serial.print("\tI = "); Serial.print(I_e_xs,4);
   // Compute Derivative
   D_xs = (current_xspeed - old_xspeed)/time_diff;
-  Serial.print("\tD = "); Serial.print(D_xs,4);
   // Compute PID Output
   xspeed_output = e_xs*kp_xspeed + ki_xspeed*I_e_xs - kd_xspeed*D_xs;
-  Serial.print("\tOut = "); Serial.println(xspeed_output,4);
   // Update old_y
   old_xspeed = current_xspeed;
   

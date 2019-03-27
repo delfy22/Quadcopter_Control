@@ -25,19 +25,13 @@ void PIDOO::limit_des_val(float lower_lim, float upper_lim) {
 // Prototype to calculate PID outputs
 float PIDOO::compute_PID (float current_val, float time_diff) {
   // Compute Error
-  Serial.print("ki = "); Serial.print(ki);
-  Serial.print("\ttime diff = "); Serial.print(time_diff,6);
   float e = des - current_val;
-  Serial.print("\tE = "); Serial.print(e,6);
   // Compute Integral
   I_e = I_e + e*time_diff;
-  Serial.print("\tI = "); Serial.print(I_e,4);
   // Compute Derivative
   D = (current_val - old_val)/time_diff;
-  Serial.print("\tD = "); Serial.print(D,4);
   // Compute PID Output
   output = e*kp + ki*I_e - kd*D;
-  Serial.print("\tOut = "); Serial.println(output,4);
   // Update old_yaw
   old_val = current_val;
 

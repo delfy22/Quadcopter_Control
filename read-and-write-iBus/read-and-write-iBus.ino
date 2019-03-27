@@ -25,14 +25,15 @@
 #include "PIDOO.h"
 
 
-#define IBUS_MAXCHANNELS  14  // iBus has a maximum of 14 channels
+#define IBUS_MAXCHANNELS  14    // iBus has a maximum of 14 channels
 #define IBUS_LOWER_LIMIT  1000
 #define IBUS_UPPER_LIMIT  2000
 #define MIN_THRUST        1000
 #define MAX_THRUST        1100
-#define IMU_SAMPLE_TIME   0.02 // Set the delay between fresh samples (in S)
-#define CF_SAMPLE_TIME    0.1
-#define MAX_SPEED         0.75 // If any speeds are above threshold, kill the drone for safety
+#define IMU_SAMPLE_TIME   0.01  // Set the delay between fresh IMU samples (in S)
+#define CF_SAMPLE_TIME    0.1   // Set the delay between fresh Crazyflie samples (in S)
+#define LOOP_TIME         10    // Set the main loop time (in mS)
+#define MAX_DRONE_SPEED   0.75  // If any speeds are above threshold, kill the drone for safety
 
 PIDOO xPosPID;
 PIDOO yPosPID;
@@ -44,7 +45,6 @@ PIDOO yawPosPID;
 
 HardwareSerial MySerial(2);
 HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
-PID positionController;
 
 static uint16_t* set_safe_outputs (uint16_t *channel_data_in); // function prototype
 static uint16_t* set_outputs (uint16_t roll, uint16_t pitch, uint16_t throttle, uint16_t yaw, uint16_t arming_sw, uint16_t automated_sw, uint16_t *channel_data_in);
@@ -58,14 +58,14 @@ void connectToNetwork() {
   
   WiFi.begin(ssid, password);
 
-  Serial.println("Connecting...");
+  Serial.println("Connecting to WiFi...");
 
   while (WiFi.status() != WL_CONNECTED) { // Wait until Wifi is connected
     Serial.println("Still Connecting...");
     delay(1000);
   }
 
-  Serial.println("Connected!");
+  Serial.println("Connected to WiFi!");
 }
 /***************************************************************************************/
 
@@ -85,17 +85,14 @@ void sub_cb_loco (const std_msgs::Float32MultiArray& data_rec) {
 }
 
 void sub_cb_kptuning (const std_msgs::Float32& data_rec) {
-//  positionController.set_xspeed_constants(data_rec.data, 0, 0, 0, 0);
   tuning_data[0] = data_rec.data;
   tuning_params_changed = 1;
 }
 void sub_cb_kituning (const std_msgs::Float32& data_rec) {
-//  positionController.set_xspeed_constants(data_rec.data, 0, 0, 0, 0);
   tuning_data[1] = data_rec.data;
   tuning_params_changed = 1;
 }
 void sub_cb_kdtuning (const std_msgs::Float32& data_rec) {
-//  positionController.set_xspeed_constants(data_rec.data, 0, 0, 0, 0);
   tuning_data[2] = data_rec.data;
   tuning_params_changed = 1;
 }
@@ -108,10 +105,12 @@ ros::Subscriber<std_msgs::Float32> data_sub_kdtuning("tuning_data_kd", &sub_cb_k
 
 static std_msgs::Float32 testRunning;
 static std_msgs::Float32 xvel_data; 
+static std_msgs::Float32 yvel_data; 
 static std_msgs::Float32 xspeedpid_data; 
 
 ros::Publisher data_pub_testing("Testing_Data", &testRunning);
-ros::Publisher data_pub_vel("ESP_Data_vel", &xvel_data);
+ros::Publisher data_pub_xvel("ESP_Data_xvel", &xvel_data);
+ros::Publisher data_pub_yvel("ESP_Data_yvel", &yvel_data);
 ros::Publisher data_pub_PID("PID_Output", &xspeedpid_data);
 
 
@@ -129,20 +128,20 @@ void setCalibrationOffsets() {
   adafruit_bno055_offsets_t calibrationData;
   
   // Restore calibration data
-  calibrationData.accel_offset_x = 6;
-  calibrationData.accel_offset_y = 32;
-  calibrationData.accel_offset_z = -26;
+  calibrationData.accel_offset_x = 18;
+  calibrationData.accel_offset_y = 53;
+  calibrationData.accel_offset_z = -2;
   
-  calibrationData.mag_offset_x = 1557;
-  calibrationData.mag_offset_y = 67;
-  calibrationData.mag_offset_z = -1875;
+  calibrationData.mag_offset_x = 1404;
+  calibrationData.mag_offset_y = 140;
+  calibrationData.mag_offset_z = -2021;
   
-  calibrationData.gyro_offset_x = -1;
-  calibrationData.gyro_offset_y = -3;
+  calibrationData.gyro_offset_x = 0;
+  calibrationData.gyro_offset_y = -2;
   calibrationData.gyro_offset_z = -2;
   
   calibrationData.accel_radius = 1000;
-  calibrationData.mag_radius = 637;
+  calibrationData.mag_radius = 627;
 
   bno.setSensorOffsets(calibrationData);  
 }
@@ -198,7 +197,7 @@ private:
 };
 /***************************************************************************************/
 
-
+/*--------------------------------------------------------------------------------------------------------------------------------------------*/
 /***************************************************************************************/
 /******************************Setup****************************************************/
 void setup() {
@@ -212,6 +211,7 @@ void setup() {
 //  channel_count = 6; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
 
   bno.begin();
+  bno.setMode(Adafruit_BNO055::OPERATION_MODE_CONFIG);
   bno.setExtCrystalUse(true);
   setCalibrationOffsets();
   // Set IMU mode to nine degrees of freedom (found in BN055 datasheet)
@@ -224,14 +224,16 @@ void setup() {
   CF_Vel[1] = 0.0;
   CF_Vel[2] = 0.0;
   CF_Yaw = 0.0;
-  
+
+  Serial.println("Connecting to ROS...");
   // Initalise node, advertise the pub and subscribe the sub
   IPAddress serverIp(10,42,0,1);      // rosserial socket ROSCORE SERVER IP address 
-  const uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
+  uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
   nh.initNode();
   nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
   nh.advertise(data_pub_testing);
-  nh.advertise(data_pub_vel);
+  nh.advertise(data_pub_xvel);
+  nh.advertise(data_pub_yvel);
   nh.advertise(data_pub_PID);
   nh.subscribe(data_sub_loco);
   nh.subscribe(data_sub_kptuning);
@@ -241,18 +243,13 @@ void setup() {
   
   testRunning.data = 0.0;
   xvel_data.data = 0.0;
+  yvel_data.data = 0.0;
   xspeedpid_data.data = 0.0;
 
   // Initialise PID Controllers
   // Initialise with (kp,ki,kd,Ie,D)
-  positionController.set_x_constants(0,0,0,0,0);
-  positionController.set_y_constants(0,0,0,0,0);
-  positionController.set_z_constants(0,0,0,0,0);
-
-  tuning_data[0] = 20; tuning_data[1] = 0; tuning_data[2] = 10;
-  positionController.set_xspeed_constants(tuning_data[0],tuning_data[1],tuning_data[2],0,0); //0.5
-  positionController.set_yspeed_constants(tuning_data[0],tuning_data[1],tuning_data[2],0,0);
-  positionController.set_zspeed_constants(0.0,0,0,0,0);
+//
+  tuning_data[0] = 0.11; tuning_data[1] = 0; tuning_data[2] = 0.1;
 
   xPosPID.set_PID_constants(0,0,0,0,0);
   xPosPID.set_desired_value(0.0);
@@ -260,30 +257,27 @@ void setup() {
   yPosPID.set_desired_value(0.0);
   zPosPID.set_PID_constants(0,0,0,0,0);
   zPosPID.set_desired_value(0.0);
-  xSpeedPID.set_PID_constants(20,0,10,0,0);
+  xSpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2],0,0);
   xSpeedPID.set_desired_value(0.0);
-  ySpeedPID.set_PID_constants(20,0,10,0,0);
+  ySpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2],0,0);
   ySpeedPID.set_desired_value(0.0);
   zSpeedPID.set_PID_constants(0,0,0,0,0);
   zSpeedPID.set_desired_value(0.0);
   yawPosPID.set_PID_constants(0,0,0,0,0);
-  yawPosPID.set_desired_value(0.0);
-  
-//  xSpeedPID.set_PID_constants(20,0,10,0,0);
-//  xSpeedPID.set_desired_value(0.0);
-  
+  yawPosPID.set_desired_value(0.0);  
 
   Serial.println("Finished Setup");
 }
 /***************************************************************************************/
 
-
+/*--------------------------------------------------------------------------------------------------------------------------------------------*/
 /***************************************************************************************/
 /**************************************Main Loop****************************************/
 void loop() {
-  
+  static unsigned long start_of_loop = micros();
   static unsigned long start_time = micros();
-  static unsigned long old_time = micros();
+  static unsigned long old_PID_time = micros();
+  static unsigned long old_loop_time = millis();
   static unsigned long IMU_Read_Time = start_time - IMU_SAMPLE_TIME;
   static unsigned long CF_Read_Time = start_time - CF_SAMPLE_TIME;
   static float time_diff = 0.0;
@@ -347,20 +341,14 @@ void loop() {
 // Correct IMU velocities using readings from the crazyflie
 // NOTE: maybe use flags to see if data has changed?
 time_diff = (micros() - CF_Read_Time)/1000000.0;
-
 if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
   velocities[0] = CF_Vel[0];
   velocities[1] = CF_Vel[1];
   velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
   old_z_position = CF_Vel[2];
   yaw = CF_Yaw;
-//  Serial.print("\n CF Data: ");
-//  Serial.println(CF_Vel[2], 4);
-//  Serial.print("z velocity = ");
-//  Serial.println(velocities[2], 4);
   CF_Read_Time = micros();
 }
-
 /***************************************************************************************/
 /************************************Read IMU Data**************************************/
 
@@ -412,9 +400,10 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     IMU_Read_Time = micros();
   }
   
-  if ( velocities[0] > MAX_SPEED || velocities[1] > MAX_SPEED || velocities[2] > MAX_SPEED ) {
+  if ( velocities[0] > MAX_DRONE_SPEED || velocities[1] > MAX_DRONE_SPEED || velocities[2] > MAX_DRONE_SPEED ) {
     remote_lost = 1; // If speeds are too high, assume the drone is lost and kill the power
     armed = 0;
+    if(displayStatus) Serial.println("TOO FAST!");
   }
 /***************************************************************************************/
 
@@ -423,21 +412,19 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
 
 //  testRunning.data = EMA_s[0];
   xvel_data.data = velocities[0];
+  yvel_data.data = velocities[1];
   data_pub_testing.publish(&testRunning); // Set the data to be sent back to ROS.
-  data_pub_vel.publish(&xvel_data);
+  data_pub_xvel.publish(&xvel_data);
+  data_pub_yvel.publish(&yvel_data);
   data_pub_PID.publish(&xspeedpid_data);
   
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
   if (tuning_params_changed) {
-    positionController.set_xspeed_constants(tuning_data[0], tuning_data[1], tuning_data[2], 0, 0);
-    positionController.set_yspeed_constants(tuning_data[0], tuning_data[1], tuning_data[2], 0, 0);
-
     xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2], 0, 0);
     ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2], 0, 0);
     tuning_params_changed = 0;
   }
-  
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
@@ -481,7 +468,7 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
   else if(automated) {
     
     unsigned long current_time = micros();
-    time_diff = (current_time - old_time)/1000000.0; // micros() time overflows after 70 mins but this difference will still be correct as it also overflows
+    time_diff = (current_time - old_PID_time)/1000000.0; // micros() time overflows after 70 mins but this difference will still be correct as it also overflows
 
     // for testing, replace with readings
     float current_x = 0.0;
@@ -492,57 +479,47 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     float current_zspeed = velocities[2];
     float current_pitch = orient[1];
     float current_roll = orient[0];
+    float current_yaw = yaw;
 
-    // format (x, y, z, yaw)
-    positionController.set_desired_values(0.0, 0.0, 0.0, 0.0);
-    float desired_yaw = 0.0;
-    
-    // position controller inputs (current_pos, desired_pos, time_diff)
-    float xOutput = positionController.compute_x_PID(current_x, time_diff);
-    float yOutput = positionController.compute_y_PID(current_y, time_diff);
-    float zOutput = positionController.compute_z_PID(current_z, time_diff); // Need to scale -inf to inf output to between 1000 and 2000
+/***************************************************************************************/
+/****************************Position and Speed Controllers*****************************/
+    // position controller inputs (current_pos, time_diff)
+    float xPosOutput = xPosPID.compute_PID(current_x, time_diff);
+    float yPosOutput = yPosPID.compute_PID(current_y, time_diff);
+    float zPosOutput = zPosPID.compute_PID(current_z, time_diff);
+    float yawPosOutput = yawPosPID.compute_PID(current_yaw, time_diff);
 
-
-    // speed controller inputs (current_speed, desired_speed, time_diff)
-//    float xSpeedOutput = positionController.compute_xspeed_PID(current_xspeed, xOutput, time_diff);
-//    float xSpeedOutput = -positionController.compute_xspeed_PID(current_xspeed, desired_xspeed, time_diff);
-
+    // speed controller inputs (current_speed, time_diff)
 //    xSpeedPID.set_desired_value(xOutput);
-    float xSpeedOutput = -xSpeedPID.compute_PID(current_xspeed, time_diff);
-    //    ySpeedPID.set_desired_value(yOutput);
-    float ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff);
-    //    zSpeedPID.set_desired_value(zOutput);
-    float zSpeedOutput = -zSpeedPID.compute_PID(current_zspeed, time_diff);
-    
-//    float ySpeedOutput = -positionController.compute_yspeed_PID(current_yspeed, desired_xspeed, time_diff);
-//    float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
+    float xSpeedOutput = xSpeedPID.compute_PID(current_xspeed, time_diff);
+//    ySpeedPID.set_desired_value(yOutput);
+    float ySpeedOutput = ySpeedPID.compute_PID(current_yspeed, time_diff);
+//    zSpeedPID.set_desired_value(zOutput);
+    float zSpeedOutput = zSpeedPID.compute_PID(current_zspeed, time_diff);
 
     xSpeedOutput = xSpeedOutput*500.0 + 1500;
-//    xSpeedOutput = saturateiBusCommand(xSpeedOutput); 
-//    ySpeedOutput = saturateiBusCommand(ySpeedOutput); 
+    ySpeedOutput = ySpeedOutput*500.0 + 1500;
+//    zSpeedOutput = zSpeedOutput*500.0 + 1500;
     
     xspeedpid_data.data = xSpeedOutput - 1500.0;  
+//    yspeedpid_data.data = ySpeedOutput - 1500.0; 
 
 // The flow deck vx and vy are relative to drone's position, not world x and y frame. Is this needed if loco used as well?
 //    // orientation conversion input (current angle) (desired angles taken from speed controllers already)
 //    float pitchOutput = positionController.compute_desired_pitch(current_pitch)*500 + 1500;
 //    float rollOutput = positionController.compute_desired_roll(current_roll)*500 + 1500;
- 
-    
-    // Saturate values to be sent to FCU
-//    zOutput = saturateiBusCommand(zOutput);
-//    pitchOutput = saturateiBusCommand(pitchOutput);
-//    rollOutput = saturateiBusCommand(rollOutput);  
+/***************************************************************************************/
+
 
 //    set_outputs( rollOutput, pitchOutput, zOutput, desired_yaw, 1500, 2000 ); // last 2 values are armed and automated controls
     if (iBus.readChannel(4) > 1600) {
-      channel_data = set_outputs( iBus.readChannel(0), xSpeedOutput, iBus.readChannel(2), iBus.readChannel(3), 1500, 1000, channel_data ); // last 2 values are armed and automated controls
+      channel_data = set_outputs( ySpeedOutput, iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), iBus.readChannel(4), 1000, channel_data ); // last 2 values are armed and automated controls
     }
     else {
-      channel_data = set_outputs( iBus.readChannel(0), iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), 1500, 1000, channel_data ); // last 2 values are armed and automated controls
+      channel_data = set_outputs( iBus.readChannel(0), iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), iBus.readChannel(4), 1000, channel_data ); // last 2 values are armed and automated controls
     }
     
-    old_time = current_time;
+    old_PID_time = current_time;
   }
   
   // If we suspect the controller is lost, set all outputs to known safe values
@@ -550,8 +527,7 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     channel_data = set_safe_outputs(channel_data);
     if (displayStatus) Serial.println("Entering Safe State");
   }
-
-
+  
   // NOTE: Should there be checks to ensure we're writing new data?
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
 
@@ -587,9 +563,15 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     }
     Serial.println();
   }
-  
-  delay(10); // Set a delay between sending frames
+
+  // Ensure loop runs at the correct rate
+  time_diff = millis() - old_loop_time;
+  if (time_diff < LOOP_TIME) {
+    delay (LOOP_TIME - time_diff);
+  }
+  old_loop_time = millis();
 }
+/*--------------------------------------------------------------------------------------------------------------------------------------------*/
 
 // NOTE: Do we need to return the array? If we pass in a pointer to the array and change variables at these memory locations then it is changing the original array.
 // NOTE: Set explicit size of the array pointer input?
