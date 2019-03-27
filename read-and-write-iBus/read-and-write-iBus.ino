@@ -72,6 +72,7 @@ void connectToNetwork() {
 /***************************************************************************************/
 /**************************ROS Stuff****************************************************/
 static float CF_Vel [3];
+static float CF_Yaw;
 static float tuning_data [3];
 static bool tuning_params_changed = 0;
 
@@ -80,6 +81,7 @@ void sub_cb_loco (const std_msgs::Float32MultiArray& data_rec) {
   CF_Vel[0] = data_rec.data[0];
   CF_Vel[1] = data_rec.data[1];
   CF_Vel[2] = data_rec.data[2];
+  CF_Yaw = data_rec.data[3];
 }
 
 void sub_cb_kptuning (const std_msgs::Float32& data_rec) {
@@ -121,7 +123,6 @@ ros::NodeHandle nh;
 Adafruit_BNO055 bno = Adafruit_BNO055();
 
 static unsigned long IMU_Read_Time;
-static float velocities [3]; // holds [x vel, y vel, z vel]
 static float desired_xspeed = 0;
 
 void setCalibrationOffsets() {
@@ -216,15 +217,16 @@ void setup() {
   // Set IMU mode to nine degrees of freedom (found in BN055 datasheet)
   bno.setMode(Adafruit_BNO055::OPERATION_MODE_NDOF);
 
-  velocities[0] = 0.0; // x vel
-  velocities[1] = 0.0; // y vel
-  velocities[2] = 0.0; // z vel
+//  velocities[0] = 0.0; // x vel
+//  velocities[1] = 0.0; // y vel
+//  velocities[2] = 0.0; // z vel
   CF_Vel[0] = 0.0;
   CF_Vel[1] = 0.0;
   CF_Vel[2] = 0.0;
+  CF_Yaw = 0.0;
   
   // Initalise node, advertise the pub and subscribe the sub
-  IPAddress serverIp(10,42,0,61);      // rosserial socket ROSCORE SERVER IP address 
+  IPAddress serverIp(10,42,0,1);      // rosserial socket ROSCORE SERVER IP address 
   const uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
   nh.initNode();
   nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
@@ -287,6 +289,8 @@ void loop() {
   static float time_diff = 0.0;
 
   static float old_z_position = 0;
+  static float velocities [3] = {0.0, 0.0, 0.0}; // holds [x vel, y vel, z vel]
+  static float yaw = 0.0;
   
   static uint8_t channel_count = 6;
   static uint16_t *channel_data = new uint16_t[channel_count];
@@ -349,6 +353,7 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
   velocities[1] = CF_Vel[1];
   velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
   old_z_position = CF_Vel[2];
+  yaw = CF_Yaw;
 //  Serial.print("\n CF Data: ");
 //  Serial.println(CF_Vel[2], 4);
 //  Serial.print("z velocity = ");
@@ -378,7 +383,8 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     // Options for reading are:
     // VECTOR_MAGNETOMETER (uT), VECTOR_GYROSCOPE (rps), VECTOR_EULER (deg)
     // VECTOR_ACCELEROMETER (m/s^2), VECTOR_LINEARACCEL (m/s^2), VECTOR_GRAVITY (m/s^2)
-    orient = bno.getVector(Adafruit_BNO055::VECTOR_EULER); // Get IMU's Euler orientation
+    // NOTE: FUSE ORIENTATION WITH YAW FROM CF
+    orient = bno.getVector(Adafruit_BNO055::VECTOR_EULER); // Get IMU's Euler orientation 
     accels = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL); // Get linear accelerations with gravity accounted for
     
     // Implement moving average filter
@@ -387,7 +393,8 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     myEMA.setSz(accels.z());
 
 //    testRunning.data = myEMA.getSx()/10.0;
-    
+
+    // NOTE: SORT OUT AUTOMATIC CALIBRATION OF IMU
     // Integrate using filtered accelerations and trapezium integration
 //    velocities[0] = velocities[0] + (myEMA.getSx() + myEMA.getOldSx())*time_diff/2;
 //    velocities[1] = velocities[1] + (myEMA.getSy() + myEMA.getOldSy())*time_diff/2;
@@ -435,6 +442,8 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
 
   // If we're in manual mode, pass data read from receiver to the FCU
   if (!automated) {
+    if (displayStatus) Serial.print("Data received is: ");
+    
     for (uint8_t i = 0; i < channel_count; i++) {
       uint16_t read_data = iBus.readChannel(i); // Read one frame
       channel_data[i] = read_data;
@@ -496,17 +505,17 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
 
     // speed controller inputs (current_speed, desired_speed, time_diff)
 //    float xSpeedOutput = positionController.compute_xspeed_PID(current_xspeed, xOutput, time_diff);
-    float xSpeedOutput = -positionController.compute_xspeed_PID(current_xspeed, desired_xspeed, time_diff);
-    float newoutput = -xSpeedPID.compute_PID(current_xspeed, time_diff);
-    if (newoutput != xSpeedOutput) {
-      Serial.println("Different");
-    }
-    Serial.print(xSpeedOutput); Serial.print("\t");
-    Serial.println(newoutput);
+//    float xSpeedOutput = -positionController.compute_xspeed_PID(current_xspeed, desired_xspeed, time_diff);
+
+//    xSpeedPID.set_desired_value(xOutput);
+    float xSpeedOutput = -xSpeedPID.compute_PID(current_xspeed, time_diff);
+    //    ySpeedPID.set_desired_value(yOutput);
+    float ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff);
+    //    zSpeedPID.set_desired_value(zOutput);
+    float zSpeedOutput = -zSpeedPID.compute_PID(current_zspeed, time_diff);
     
-//    float ySpeedOutput = -positionController.compute_yspeed_PID(current_yspeed, yOutput, time_diff);
-    float ySpeedOutput = -positionController.compute_yspeed_PID(current_yspeed, desired_xspeed, time_diff);
-    float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
+//    float ySpeedOutput = -positionController.compute_yspeed_PID(current_yspeed, desired_xspeed, time_diff);
+//    float zSpeedOutput = positionController.compute_zspeed_PID(current_zspeed, zOutput, time_diff);
 
     xSpeedOutput = xSpeedOutput*500.0 + 1500;
 //    xSpeedOutput = saturateiBusCommand(xSpeedOutput); 
@@ -545,6 +554,39 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
 
   // NOTE: Should there be checks to ensure we're writing new data?
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
+
+  if (displayStatus) {
+  Serial.print("Data sent is: ");
+    for (uint8_t i = 0; i < channel_count; i++) {
+      if (displayStatus) {
+        switch (i) {
+          case 0:
+            Serial.print("Roll=");
+            break;
+          case 1:
+            Serial.print("Pitch=");
+            break;
+          case 2:
+            Serial.print("Throttle=");
+            break;
+          case 3:
+            Serial.print("Yaw=");
+            break;
+          case 4:
+            Serial.print("SWC=");
+            break;
+          case 5:
+            Serial.print("SWB=");
+            break;
+          default:
+            break;
+        }
+        Serial.print(channel_data[i]);
+        Serial.print(", ");
+      }
+    }
+    Serial.println();
+  }
   
   delay(10); // Set a delay between sending frames
 }
