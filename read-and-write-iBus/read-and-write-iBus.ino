@@ -22,7 +22,6 @@
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
 #include "PID.h"
-#include "PIDOO.h"
 
 
 #define IBUS_MAXCHANNELS  14    // iBus has a maximum of 14 channels
@@ -35,13 +34,13 @@
 #define LOOP_TIME         10    // Set the main loop time (in mS)
 #define MAX_DRONE_SPEED   0.75  // If any speeds are above threshold, kill the drone for safety
 
-PIDOO xPosPID;
-PIDOO yPosPID;
-PIDOO zPosPID;
-PIDOO xSpeedPID;
-PIDOO ySpeedPID;
-PIDOO zSpeedPID;
-PIDOO yawPosPID;
+PID xPosPID;
+PID yPosPID;
+PID zPosPID;
+PID xSpeedPID;
+PID ySpeedPID;
+PID zSpeedPID;
+PID yawPosPID;
 
 HardwareSerial MySerial(2);
 HardwareSerial& iBus_serial = MySerial; // Choose which serial port the iBus will be communicating over
@@ -108,10 +107,17 @@ static std_msgs::Float32 xvel_data;
 static std_msgs::Float32 yvel_data; 
 static std_msgs::Float32 xspeedpid_data; 
 
+static std_msgs::Float32 xacc_data; 
+static std_msgs::Float32 yacc_data; 
+
 ros::Publisher data_pub_testing("Testing_Data", &testRunning);
 ros::Publisher data_pub_xvel("ESP_Data_xvel", &xvel_data);
 ros::Publisher data_pub_yvel("ESP_Data_yvel", &yvel_data);
 ros::Publisher data_pub_PID("PID_Output", &xspeedpid_data);
+
+
+ros::Publisher data_pub_xacc("ESP_Data_xacc", &xacc_data);
+ros::Publisher data_pub_yacc("ESP_Data_yacc", &yacc_data);
 
 
 ros::NodeHandle nh;
@@ -211,11 +217,12 @@ void setup() {
 //  channel_count = 6; // Must specify how many pieces of data we're explicitly setting, any others will be set to default value
 
   bno.begin();
-  bno.setMode(Adafruit_BNO055::OPERATION_MODE_CONFIG);
+  delay(20);
   bno.setExtCrystalUse(true);
   setCalibrationOffsets();
   // Set IMU mode to nine degrees of freedom (found in BN055 datasheet)
   bno.setMode(Adafruit_BNO055::OPERATION_MODE_NDOF);
+  delay(20);
 
 //  velocities[0] = 0.0; // x vel
 //  velocities[1] = 0.0; // y vel
@@ -239,31 +246,37 @@ void setup() {
   nh.subscribe(data_sub_kptuning);
   nh.subscribe(data_sub_kituning);
   nh.subscribe(data_sub_kdtuning);
+
+  nh.advertise(data_pub_xacc);
+  nh.advertise(data_pub_yacc);
   Serial.println("ROS finished setup");
   
   testRunning.data = 0.0;
   xvel_data.data = 0.0;
   yvel_data.data = 0.0;
   xspeedpid_data.data = 0.0;
+  
+  xacc_data.data = 0.0; 
+  yacc_data.data = 0.0;
 
   // Initialise PID Controllers
   // Initialise with (kp,ki,kd,Ie,D)
 //
   tuning_data[0] = 0.11; tuning_data[1] = 0; tuning_data[2] = 0.1;
 
-  xPosPID.set_PID_constants(0,0,0,0,0);
+  xPosPID.set_PID_constants(0,0,0);
   xPosPID.set_desired_value(0.0);
-  yPosPID.set_PID_constants(0,0,0,0,0);
+  yPosPID.set_PID_constants(0,0,0);
   yPosPID.set_desired_value(0.0);
-  zPosPID.set_PID_constants(0,0,0,0,0);
+  zPosPID.set_PID_constants(0,0,0);
   zPosPID.set_desired_value(0.0);
-  xSpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2],0,0);
+  xSpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2]);
   xSpeedPID.set_desired_value(0.0);
-  ySpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2],0,0);
+  ySpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2]);
   ySpeedPID.set_desired_value(0.0);
-  zSpeedPID.set_PID_constants(0,0,0,0,0);
+  zSpeedPID.set_PID_constants(0,0,0);
   zSpeedPID.set_desired_value(0.0);
-  yawPosPID.set_PID_constants(0,0,0,0,0);
+  yawPosPID.set_PID_constants(0,0,0);
   yawPosPID.set_desired_value(0.0);  
 
   Serial.println("Finished Setup");
@@ -292,8 +305,10 @@ void loop() {
   static bool automated = 0;
   static bool armed = 0;
   static bool remote_lost = 0;
-  static bool displayStatus = 1; // 0 for no serial output about controller values, 1 for information
-
+  static bool displayStatus = 0; // 0 for no serial output about controller values, 1 for information
+  static bool useIMU = 1;
+  static bool useCF = 1;
+  
   remote_lost = 0;
 
   // Request one frame to be read
@@ -342,11 +357,13 @@ void loop() {
 // NOTE: maybe use flags to see if data has changed?
 time_diff = (micros() - CF_Read_Time)/1000000.0;
 if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
-  velocities[0] = CF_Vel[0];
-  velocities[1] = CF_Vel[1];
-  velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
-  old_z_position = CF_Vel[2];
-  yaw = CF_Yaw;
+  if (useCF) {
+    velocities[0] = CF_Vel[0];
+    velocities[1] = CF_Vel[1]; //CF Y opposite to IMU Y
+    velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
+    old_z_position = CF_Vel[2];
+    yaw = CF_Yaw;
+  }
   CF_Read_Time = micros();
 }
 /***************************************************************************************/
@@ -361,7 +378,7 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     testRunning.data = 0;
   }
 
-  static EMA myEMA(0.8);
+  static EMA myEMA(1);
   static imu::Vector<3> accels;
   static imu::Vector<3> orient;
 
@@ -384,9 +401,11 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
 
     // NOTE: SORT OUT AUTOMATIC CALIBRATION OF IMU
     // Integrate using filtered accelerations and trapezium integration
-//    velocities[0] = velocities[0] + (myEMA.getSx() + myEMA.getOldSx())*time_diff/2;
-//    velocities[1] = velocities[1] + (myEMA.getSy() + myEMA.getOldSy())*time_diff/2;
-//    velocities[2] = velocities[2] + (myEMA.getSz() + myEMA.getOldSz())*time_diff/2;
+    if (useIMU) {
+      velocities[0] = velocities[0] + (myEMA.getSx() + myEMA.getOldSx())*time_diff/2;
+      velocities[1] = velocities[1] + (myEMA.getSy() + myEMA.getOldSy())*time_diff/2;
+      velocities[2] = velocities[2] + (myEMA.getSz() + myEMA.getOldSz())*time_diff/2;
+    }
 
     if (displayStatus) {
       Serial.print("Velocities, [x, y, z] = \t");
@@ -396,7 +415,7 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
     }
 
     myEMA.updateOldValues();
-    
+
     IMU_Read_Time = micros();
   }
   
@@ -413,16 +432,27 @@ if ((time_diff > CF_SAMPLE_TIME) && (old_z_position != CF_Vel[2])) {
 //  testRunning.data = EMA_s[0];
   xvel_data.data = velocities[0];
   yvel_data.data = velocities[1];
+  
+//  xacc_data.data = myEMA.getSx();
+//  yacc_data.data = myEMA.getSy();
+  
+  xacc_data.data = accels.x();
+  yacc_data.data = accels.y();
+  
   data_pub_testing.publish(&testRunning); // Set the data to be sent back to ROS.
   data_pub_xvel.publish(&xvel_data);
   data_pub_yvel.publish(&yvel_data);
+  
+  data_pub_xacc.publish(&xacc_data);
+  data_pub_yacc.publish(&yacc_data);
+  
   data_pub_PID.publish(&xspeedpid_data);
   
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
   if (tuning_params_changed) {
-    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2], 0, 0);
-    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2], 0, 0);
+    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
     tuning_params_changed = 0;
   }
 /***************************************************************************************/
