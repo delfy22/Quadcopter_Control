@@ -15,6 +15,7 @@ FlySkyIBus iBus;
 void FlySkyIBus::begin(HardwareSerial& serial)
 {
 	serial.begin(115200, SERIAL_8N1, 15, 25);
+  Serial.println("Finished serial");
 	begin((Stream&)serial);
 }
 
