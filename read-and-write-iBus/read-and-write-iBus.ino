@@ -105,11 +105,12 @@ ros::Subscriber<std_msgs::Float32> data_sub_kptuning("tuning_data_kp", &sub_cb_k
 ros::Subscriber<std_msgs::Float32> data_sub_kituning("tuning_data_ki", &sub_cb_kituning, 1); 
 ros::Subscriber<std_msgs::Float32> data_sub_kdtuning("tuning_data_kd", &sub_cb_kdtuning, 1); 
 
-bool send_vel = 1;
-bool send_acc = 0;
-bool send_x = 1;
-bool send_y = 0;
-bool send_pid = 1;
+bool send_vel   = 1;
+bool send_acc   = 0;
+bool send_x     = 0;
+bool send_y     = 0;
+bool send_z     = 1;
+bool send_pid   = 1;
 bool send_extra = 0;
 
 
@@ -120,17 +121,26 @@ ros::Publisher data_pub_xvel("ESP_Data_xvel", &xvel_data);
 static std_msgs::Float32 yvel_data; 
 ros::Publisher data_pub_yvel("ESP_Data_yvel", &yvel_data);
 
-//static std_msgs::Float32 xacc_data;
-//ros::Publisher data_pub_xacc("ESP_Data_xacc", &xacc_data); 
+static std_msgs::Float32 zvel_data; 
+ros::Publisher data_pub_zvel("ESP_Data_zvel", &zvel_data);
 
-//static std_msgs::Float32 yacc_data; 
-//ros::Publisher data_pub_yacc("ESP_Data_yacc", &yacc_data);
+static std_msgs::Float32 xacc_data;
+ros::Publisher data_pub_xacc("ESP_Data_xacc", &xacc_data); 
+
+static std_msgs::Float32 yacc_data; 
+ros::Publisher data_pub_yacc("ESP_Data_yacc", &yacc_data);
+
+static std_msgs::Float32 zacc_data; 
+ros::Publisher data_pub_zacc("ESP_Data_zacc", &zacc_data);
   
 static std_msgs::Float32 xspeedpid_data; 
-//ros::Publisher data_pub_xPID("PID_xOutput", &xspeedpid_data);
+ros::Publisher data_pub_xPID("PID_xOutput", &xspeedpid_data);
 
 static std_msgs::Float32 yspeedpid_data; 
-//ros::Publisher data_pub_yPID("PID_yOutput", &yspeedpid_data);
+ros::Publisher data_pub_yPID("PID_yOutput", &yspeedpid_data);
+
+static std_msgs::Float32 zspeedpid_data; 
+ros::Publisher data_pub_zPID("PID_zOutput", &zspeedpid_data);
 
 static std_msgs::Float32 testRunning;
 ros::Publisher data_pub_testing("Testing_Data", &testRunning);
@@ -259,27 +269,55 @@ void setup() {
   nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
 
   // ChooseTopics
-  nh.advertise(data_pub_xvel);
-  xvel_data.data = 0.0;
+  if (send_vel) {
+    if (send_x) {
+      xvel_data.data = 0.0;
+      nh.advertise(data_pub_xvel);
+    }
+    if (send_y) {
+      yvel_data.data = 0.0;
+      nh.advertise(data_pub_yvel);
+    }
+    if (send_z) {
+      zvel_data.data = 0.0;
+      nh.advertise(data_pub_zvel);
+    }
+  }
 
-  nh.advertise(data_pub_yvel);
-  yvel_data.data = 0.0;
+  if (send_acc) {
+    if (send_x) {
+      xacc_data.data = 0.0;
+      nh.advertise(data_pub_xacc);
+    }
+    if (send_y) { 
+      yacc_data.data = 0.0;
+      nh.advertise(data_pub_yacc);
+    }
+    if (send_z) {
+      zacc_data.data = 0.0;
+      nh.advertise(data_pub_zacc);
+    }
+  }
 
-//  nh.advertise(data_pub_xacc);
-//  xacc_data.data = 0.0;
+  if (send_pid) {
+    if (send_x) {
+      xspeedpid_data.data = 0.0;  
+      nh.advertise(data_pub_xPID);
+    }
+    if (send_y) {
+      yspeedpid_data.data = 0.0;
+      nh.advertise(data_pub_yPID);
+    }
+    if (send_z) {
+      zspeedpid_data.data = 0.0;
+      nh.advertise(data_pub_zPID);
+    }
+  }
 
-//  nh.advertise(data_pub_yacc);
-//  yacc_data.data = 0.0;
-
-  xspeedpid_data.data = 0.0;  
-//  nh.advertise(data_pub_xPID);
-  
-  yspeedpid_data.data = 0.0;
-//  nh.advertise(data_pub_yPID);
-  
-
-  nh.advertise(data_pub_testing);
-  testRunning.data = 0.0;
+  if (send_extra) {
+    testRunning.data = 0.0;
+    nh.advertise(data_pub_testing);    
+  }
   
     
   nh.subscribe(data_sub_loco);
@@ -292,7 +330,8 @@ void setup() {
 
   // Initialise PID Controllers
   // Initialise with (kp,ki,kd)
-  tuning_data[0] = 0.052; tuning_data[1] = 0.025; tuning_data[2] = 0;
+  tuning_data[0] = 0.01; tuning_data[1] = 0.05; tuning_data[2] = 0.0;
+  float ini_xy_speed_pid [3] = {0.0575, 0.025, 0.0};
 
   xPosPID.set_PID_constants(0,0,0);
   xPosPID.set_desired_value(0.0);
@@ -300,11 +339,11 @@ void setup() {
   yPosPID.set_desired_value(0.0);
   zPosPID.set_PID_constants(0,0,0);
   zPosPID.set_desired_value(0.0);
-  xSpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2]);
+  xSpeedPID.set_PID_constants(ini_xy_speed_pid[0], ini_xy_speed_pid[1], ini_xy_speed_pid[2]);
   xSpeedPID.set_desired_value(0.0);
-  ySpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2]);
+  ySpeedPID.set_PID_constants(ini_xy_speed_pid[0], ini_xy_speed_pid[1], ini_xy_speed_pid[2]);
   ySpeedPID.set_desired_value(0.0);
-  zSpeedPID.set_PID_constants(0,0,0);
+  zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
   zSpeedPID.set_desired_value(0.0);
   yawPosPID.set_PID_constants(0,0,0);
   yawPosPID.set_desired_value(0.0);  
@@ -317,7 +356,6 @@ void setup() {
 /***************************************************************************************/
 /**************************************Main Loop****************************************/
 void loop() {
-  static unsigned long start_of_loop = micros();
   static unsigned long start_time = micros();
   static unsigned long old_PID_time = micros();
   static unsigned long old_loop_time = millis();
@@ -330,6 +368,10 @@ void loop() {
   static float yaw = 0.0;
   static float zAccOffset = 0.0;
   static uint8_t sameZCount = 0;
+  
+  static EMA myEMA(0.65);
+  static imu::Vector<3> accels;
+  static imu::Vector<3> orient;
   
   static uint8_t channel_count = 6;
 //  static uint16_t *channel_data = new uint16_t[channel_count];
@@ -386,92 +428,133 @@ void loop() {
   else {
     automated = 0;
   }
+
+//  Serial.print("Safety done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 
 /***************************************************************************************/
 /***********************************Receive ROS Data************************************/
 
-  // Set the data to be sent back to ROS.
+//  unsigned long time1, time2, time3, time4;
+  //  time1 = millis();
 
-  unsigned long time1, time2, time3, time4;
-  
+  // Set the data to be sent back to ROS.  
   // ChooseTopic
-  time1 = millis();
-  xvel_data.data = velocities[0];
-  data_pub_xvel.publish(&xvel_data);
 
-  yvel_data.data = velocities[1];
-  data_pub_yvel.publish(&yvel_data);
+  if (send_vel) {
+    if (send_x) {
+      xvel_data.data = velocities[0];
+      data_pub_xvel.publish(&xvel_data);
+    }
+    if (send_y) {
+      yvel_data.data = velocities[1];
+      data_pub_yvel.publish(&yvel_data);
+    }
+    if (send_z) {
+      zvel_data.data = velocities[2];
+      data_pub_zvel.publish(&zvel_data);
+    }
+  }
 
-//  xacc_data.data = myEMA.getSz();
-////      xacc_data.data = accels.z();
-//  data_pub_xacc.publish(&xacc_data);
+  if (send_acc) {
+    if (send_x) {
+      xacc_data.data = myEMA.getSx();
+    //      xacc_data.data = accels.z();
+      data_pub_xacc.publish(&xacc_data);
+    }
+    if (send_y) {
+      yacc_data.data = myEMA.getSy();
+    //      yacc_data.data = accels.y();
+      data_pub_yacc.publish(&yacc_data);
+    }
+    if (send_z) {
+      zacc_data.data = myEMA.getSz();
+    //      zacc_data.data = accels.z();
+      data_pub_zacc.publish(&zacc_data);
+    }
+  }
 
-//  yacc_data.data = myEMA.getSy();
-////      yacc_data.data = accels.y();
-//  data_pub_yacc.publish(&yacc_data);
-  time2 = millis();
-//  data_pub_xPID.publish(&xspeedpid_data);
-//  data_pub_yPID.publish(&yspeedpid_data);
-  time3 = millis();
-  
+  if (send_pid) {
+    if (send_x) {
+      data_pub_xPID.publish(&xspeedpid_data);
+    }
+    if (send_y) {
+      data_pub_yPID.publish(&yspeedpid_data);
+    }
+    if (send_z) {
+      data_pub_zPID.publish(&zspeedpid_data);
+    }
+  }
+//  
+//  
+
+//  time2 = millis();
+
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
   
-  time4 = millis();
   if (tuning_params_changed) {
-    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+//    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+//    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+    zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
     tuning_params_changed = 0;
   }
+
+//  time3 = millis();
+
+//  Serial.print("ROS done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 
 /***************************************************************************************/
 /************************************Read CF Data***************************************/
-// Correct IMU velocities using readings from the crazyflie
-// NOTE: maybe use flags to see if data has changed?
-time_diff = (micros() - CF_Read_Time)/1000000.0;
-bool cond1 = 0;
-bool cond2 = 0;
-bool cond3 = 0;
-bool cond4 = 0;
-bool cond5 = 0;
-cond1 = time_diff > CF_SAMPLE_TIME;
-cond2 = time_diff > (2*CF_SAMPLE_TIME);
-cond3 = sq(CF_Vel[2] - old_z_position) > 0.00016; // check if z position changes by more than 5mm
-cond4 = CF_Vel[2] == old_z_position; // measurements should not be identical unless we read before a new one is ready
-cond5 = time_diff > (10*CF_SAMPLE_TIME);
-//if (cond1 && !cond4) { // make sure sufficient time has passed for a new measurement and check they're not identical 
-//  if (!new_CF_Data) {
-//    Serial.println("cb not called");
-//    cond5 = 1;
-//  }
-//  else cond5 = 0;
-if (new_CF_Data) {
-  if (useCF) {
-    velocities[0] = CF_Vel[0];
-    velocities[1] = CF_Vel[1]; 
-//    velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
-    if (cond3)  sameZCount = 0;
-    else sameZCount++;
-    old_z_position = CF_Vel[2];
-    yaw = CF_Yaw;
+  // Correct IMU velocities using readings from the crazyflie
+  // NOTE: maybe use flags to see if data has changed?
+  time_diff = (micros() - CF_Read_Time)/1000000.0;
+  bool cond1 = 0;
+  bool cond2 = 0;
+  bool cond3 = 0;
+  bool cond4 = 0;
+  bool cond5 = 0;
+  cond1 = time_diff > CF_SAMPLE_TIME;
+  cond2 = time_diff > (2*CF_SAMPLE_TIME);
+  cond3 = sq(CF_Vel[2] - old_z_position) > 0.00016; // check if z position changes by more than 4mm
+  cond4 = CF_Vel[2] == old_z_position; // measurements should not be identical unless we read before a new one is ready
+  cond5 = time_diff > (10*CF_SAMPLE_TIME);
+  //if (cond1 && !cond4) { // make sure sufficient time has passed for a new measurement and check they're not identical 
+  //  if (!new_CF_Data) {
+  //    Serial.println("cb not called");
+  //    cond5 = 1;
+  //  }
+  //  else cond5 = 0;
+  if (new_CF_Data) {
+    if (useCF) {
+      velocities[0] = CF_Vel[0];
+      velocities[1] = CF_Vel[1];
+      if (!cond4) { 
+        velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
+      }
+      if (cond3)  sameZCount = 0;
+      else sameZCount++;
+      old_z_position = CF_Vel[2];
+      yaw = CF_Yaw;
+    }
+    CF_Read_Time = micros();
+    new_CF_Data = 0;
   }
-  CF_Read_Time = micros();
-  new_CF_Data = 0;
-}
-//else if (cond1 && !cond3 && !cond4) { // check if z position changes by less than 5mm
-//  if (useCF)  sameZCount++;
-//}
-if (cond5) { 
-  Serial.println(time_diff);
-  Serial.println(CF_Vel[0]);
-  armed = 0;
-  errorType = 4;
-}
-
-if (WiFi.status() != WL_CONNECTED) {
-  Serial.println("Wifi lost");
-}
+  //else if (cond1 && !cond3 && !cond4) { // check if z position changes by less than 5mm
+  //  if (useCF)  sameZCount++;
+  //}
+  if (cond5) { 
+    Serial.println(time_diff);
+    Serial.println(CF_Vel[0]);
+    armed = 0;
+    errorType = 4;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Wifi lost");
+  }
+  
+//  Serial.print("CF done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 /************************************Read IMU Data**************************************/
 
@@ -483,10 +566,6 @@ if (WiFi.status() != WL_CONNECTED) {
     desired_xspeed = 0;
     testRunning.data = 0;
   }
-
-  static EMA myEMA(0.65);
-  static imu::Vector<3> accels;
-  static imu::Vector<3> orient;
 
   // NOTE: try with no delay checking? Will IMU return any wrong readings? Is this causing issues?
   time_diff = (micros() - IMU_Read_Time)/1000000.0;
@@ -506,8 +585,6 @@ if (WiFi.status() != WL_CONNECTED) {
       velocities[2] = 0.0;
     }
     myEMA.setSz(accels.z() - zAccOffset);
-    
-//    testRunning.data = myEMA.getSx()/10.0;
 
     // NOTE: SORT OUT AUTOMATIC CALIBRATION OF IMU
     // Integrate using filtered accelerations and trapezium integration
@@ -529,12 +606,14 @@ if (WiFi.status() != WL_CONNECTED) {
     IMU_Read_Time = micros();
   }
   
-  if ( velocities[0] > MAX_DRONE_SPEED || velocities[1] > MAX_DRONE_SPEED ) { //|| velocities[2] > MAX_DRONE_SPEED
+  if ( velocities[0] > MAX_DRONE_SPEED || velocities[1] > MAX_DRONE_SPEED || velocities[2] > MAX_DRONE_SPEED ) {
     remote_lost = 1; // If speeds are too high, assume the drone is lost and kill the power
     armed = 0;
     if(displayStatus) Serial.println("TOO FAST!");
     errorType = 3;
   }
+
+//  Serial.print("IMU done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
@@ -576,7 +655,7 @@ if (WiFi.status() != WL_CONNECTED) {
   }
   // If in automated mode, calculate our own channel values to send to FCU
   else if(automated) {
-    
+      
     unsigned long current_time = micros();
     time_diff = (current_time - old_PID_time)/1000000.0; // micros() time overflows after 70 mins but this difference will still be correct as it also overflows
 
@@ -609,14 +688,27 @@ if (WiFi.status() != WL_CONNECTED) {
 
     xSpeedOutput = xSpeedOutput*500.0 + 1500.0;
     ySpeedOutput = ySpeedOutput*500.0 + 1500.0;
-//    zSpeedOutput = zSpeedOutput*500.0 + 1500;
+    zSpeedOutput = zSpeedOutput*500.0 + 1350.0;
+
+//    time4 = millis();
 
     if (send_pid) {
-      xspeedpid_data.data = xSpeedOutput - 1500.0;  
-      yspeedpid_data.data = ySpeedOutput - 1500.0; 
+      if (send_x) {
+        xspeedpid_data.data = xSpeedOutput - 1500.0;  
+      }
+      if (send_y) {
+        yspeedpid_data.data = ySpeedOutput - 1500.0; 
+      } 
+      if (send_z) {
+        zspeedpid_data.data = zSpeedOutput - 1350.0; 
+      }
     }
 
-// The flow deck vx and vy are relative to drone's position, not world x and y frame. Is this needed if loco used as well?
+    if (zSpeedOutput >1450) zSpeedOutput = 1450;
+
+//    Serial.print("PID done at:\t"); Serial.println(millis() - old_loop_time);
+
+// The flow deck vx and vy are relative to drone's position, not world x and y frame. 
 //    // orientation conversion input (current angle) (desired angles taken from speed controllers already)
 //    float pitchOutput = positionController.compute_desired_pitch(current_pitch)*500 + 1500;
 //    float rollOutput = positionController.compute_desired_roll(current_roll)*500 + 1500;
@@ -625,13 +717,14 @@ if (WiFi.status() != WL_CONNECTED) {
 
 //    set_outputs( rollOutput, pitchOutput, zOutput, desired_yaw, 1500, 2000 ); // last 2 values are armed and automated controls
     if (iBus.readChannel(4) > 1600) {
-      set_outputs( ySpeedOutput, xSpeedOutput, iBus.readChannel(2), iBus.readChannel(3), armed*iBus.readChannel(4), 1000, &channel_data[0] ); // last 2 values are armed and automated controls
+      set_outputs( ySpeedOutput, xSpeedOutput, zSpeedOutput, iBus.readChannel(3), armed*iBus.readChannel(4), 1000, &channel_data[0] ); // last 2 values are armed and automated controls
     }
     else {
       set_outputs( iBus.readChannel(0), iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), armed*iBus.readChannel(4), 1000, &channel_data[0] ); // last 2 values are armed and automated controls
       // Reset integrals with switch
-      xSpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2]);
-      ySpeedPID.set_PID_constants(tuning_data[0],tuning_data[1],tuning_data[2]);
+      xSpeedPID.reset_integral();
+      ySpeedPID.reset_integral();
+      zSpeedPID.reset_integral();
     }
     
     old_PID_time = current_time;
@@ -646,34 +739,36 @@ if (WiFi.status() != WL_CONNECTED) {
   // NOTE: Should there be checks to ensure we're writing new data?
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
 
-  testRunning.data = errorType; 
-  data_pub_testing.publish(&testRunning);
-
-  if (!armed) {
-    if (errorType != 0) {
-      switch(errorType){
-        case 1:
-          Serial.println("No data rec from RF");
-          break;
-        case 2:
-          Serial.println("Remote lost");
-          break;
-        case 3:
-          Serial.println("Going too fast");
-          break;  
-        case 4:
-          Serial.println("No CF data");
-          break;
-        default:
-          break;
-      }
-    }
-    else Serial.println("Something else has happened");
-
-    if (remote_lost) {
-      Serial.println("Remote lost");
-    }
+  if (send_extra) {
+    testRunning.data = errorType; 
+    data_pub_testing.publish(&testRunning);
   }
+
+//  if (!armed) {
+//    if (errorType != 0) {
+//      switch(errorType){
+//        case 1:
+//          Serial.println("No data rec from RF");
+//          break;
+//        case 2:
+//          Serial.println("Remote lost");
+//          break;
+//        case 3:
+//          Serial.println("Going too fast");
+//          break;  
+//        case 4:
+//          Serial.println("No CF data");
+//          break;
+//        default:
+//          break;
+//      }
+//    }
+//    else Serial.println("Something else has happened");
+//
+//    if (remote_lost) {
+//      Serial.println("Remote lost");
+//    }
+//  }
   
 
   if (displayStatus) {
@@ -709,18 +804,20 @@ if (WiFi.status() != WL_CONNECTED) {
     Serial.println();
   }
 
+//  Serial.print("\n");
   // Ensure loop runs at the correct rate
   time_diff = millis() - old_loop_time;
-  if (time_diff > 11) {
-    Serial.println("\nHELP *********************************************************");
-    Serial.print("Loop time is: "); Serial.println(time_diff);
-
-    Serial.println("ROS Times: ");
-    Serial.print(time1); Serial.print("\t");
-    Serial.print(time2); Serial.print("\t");
-    Serial.print(time3); Serial.print("\t");
-    Serial.println(time4); 
-  }
+//  if (time_diff > 11) {
+//    Serial.println("\nHELP *********************************************************");
+//    Serial.print("Loop time is: "); Serial.println(time_diff);
+//
+//    Serial.println("ROS Times: ");
+//    Serial.print(time1); Serial.print("\t");
+//    Serial.print(time2); Serial.print("\t");
+//    Serial.print(time3); Serial.print("\t");
+//    Serial.println(time4); 
+//    Serial.print("\n");
+//  }
     
   if (time_diff < LOOP_TIME) {
     delay (LOOP_TIME - time_diff);

@@ -24,6 +24,11 @@ void PID::limit_des_val(float lower_lim, float upper_lim) {
   }
 }
 
+void PID::reset_integral () {
+  I_e = 0;
+  D = 0;
+}
+
 // Prototype to calculate PID outputs
 float PID::compute_PID (float current_val, float time_diff) {
   // Compute Error
