@@ -115,11 +115,11 @@ ros::Subscriber<std_msgs::Float32> data_sub_kituning("tuning_data_ki", &sub_cb_k
 ros::Subscriber<std_msgs::Float32> data_sub_kdtuning("tuning_data_kd", &sub_cb_kdtuning); 
 ros::Subscriber<std_msgs::Float32> data_sub_zdes("zdes", &sub_cb_zdes);
 
-bool send_vel   = 0;
+bool send_vel   = 1;
 bool send_acc   = 0;
 bool send_x     = 0;
-bool send_y     = 1;
-bool send_z     = 0;
+bool send_y     = 0;
+bool send_z     = 1;
 bool send_pid   = 1;
 bool send_extra = 0;
 
@@ -250,11 +250,12 @@ void beginSPIFFS () {
   Serial.println("Beginning SPIFF setup");
   SPIFFS.begin(true);
 
-  datalog = SPIFFS.open(filename, FILE_WRITE);
-  
-  datalog.close();
+//  datalog = SPIFFS.open(filename, FILE_WRITE);
+//  
+//  datalog.close();
 
   datalog = SPIFFS.open(filename, FILE_APPEND);
+  datalog.println("\n");
   datalog.println("XVelocity\tYVelocity\tZVelocity\tTime");
   
   Serial.println("Finished SPIFF setup");
@@ -360,10 +361,13 @@ void setup() {
 
   // Initialise PID Controllers
   // Initialise with (kp,ki,kd)
-  z_des = 0.0;
-  tuning_data[0] = 0; tuning_data[1] = 0; tuning_data[2] = 0;
-  float ini_xy_speed_pid [3] = {0.0575, 0.025, 0}; //{0.0575, 0.025, 0}
-  float ini_z_speed_pid [3] = {0.015, 0.6, 0.009};
+  z_des = 0.3;
+//  tuning_data[0] = 0; tuning_data[1] = 0; tuning_data[2] = 0;
+  float ini_xy_speed_pid [3] = {0.0575, 0.025, 0};
+  float ini_z_speed_pid [3] = {0.012, 0.08, 0.0025};
+  for (int i = 0; i<3; i++) {
+     tuning_data[i] =  ini_z_speed_pid[i];
+  }
 
   xPosPID.set_PID_constants(0,0,0);
   xPosPID.set_desired_value(0.0);
@@ -526,10 +530,10 @@ void loop() {
   if (tuning_params_changed) {
 //    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
 //    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-//    zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-//    zSpeedPID.set_desired_value(z_des);
-    zPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-    zPosPID.set_desired_value(z_des);
+    zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+    zSpeedPID.set_desired_value(z_des);
+//    zPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+//    zPosPID.set_desired_value(z_des);
     tuning_params_changed = 0;
   }
 
@@ -552,34 +556,19 @@ void loop() {
   cond2 = time_diff > (2*CF_SAMPLE_TIME);
   cond3 = sq(CF_Vel[2] - old_z_position) > 0.00016; // check if z position changes by more than 4mm
   cond4 = CF_Vel[2] == old_z_position; // measurements should not be identical unless we read before a new one is ready
-  //if (cond1 && !cond4) { // make sure sufficient time has passed for a new measurement and check they're not identical 
-  //  if (!new_CF_Data) {
-  //    Serial.println("cb not called");
-  //    cond5 = 1;
-  //  }
-  //  else cond5 = 0;
   if (new_CF_Data) {
     if (useCF) {
       velocities[0] = CF_Vel[0];
       velocities[1] = CF_Vel[1];
       velocities[2] = CF_Vel[2];
-//      if (!cond4) { 
-////        velocities[2] = (CF_Vel[2] - old_z_position)/time_diff; // CF_Vel[2] coming in is z position not velocity, until this is fixed, differentiate position
-//      }
-//      if (cond3)  sameZCount = 0;
-//      else sameZCount++;
-//      old_z_position = CF_Vel[2];
       yaw = CF_Yaw;
     }
     CF_Read_Time = micros();
     new_CF_Data = 0;
   }
-  //else if (cond1 && !cond3 && !cond4) { // check if z position changes by less than 5mm
-  //  if (useCF)  sameZCount++;
-  //}
 
   time_diff = (micros() - CF_Read_Time)/1000000.0;
-  cond5 = time_diff > 1;
+  cond5 = time_diff > 1; // check if we haven't had CF data for at least a second, if so disarm drone.
   if (cond5) { 
     armed = 0;
     errorType = 4;
@@ -654,7 +643,14 @@ void loop() {
     if (datalog.size() > 950000) { // check to see if the flash is filling up (950kB)
       Serial.println(datalog.size());
       datalog.close();
-      beginSPIFFS();      
+      
+      datalog = SPIFFS.open(filename, FILE_WRITE);  
+      datalog.close();
+
+      datalog = SPIFFS.open(filename, FILE_APPEND);
+      datalog.println("\n");
+      datalog.println("XVelocity\tYVelocity\tZVelocity\tTime");
+          
     }
 
     String data2print = String(velocities[0], 5) + "\t" + String(velocities[1], 5) + "\t" + String(velocities[2], 5) + "\t" + String(micros() - start_time) + "\n";
@@ -714,6 +710,10 @@ void loop() {
     }
     if (displayStatus)  Serial.println();
     old_PID_time = micros();
+
+    xSpeedPID.reset_integral();
+    ySpeedPID.reset_integral();
+    zSpeedPID.reset_integral();
   }
   // If in automated mode, calculate our own channel values to send to FCU
   else if(automated) {
@@ -750,7 +750,6 @@ void loop() {
 
     // speed controller inputs (current_speed, time_diff)
 //    xSpeedPID.set_desired_value(xOutput);
-    Serial.println("x PID: ");
     float xSpeedOutput = xSpeedPID.compute_PID(current_xspeed, time_diff);
 //    ySpeedPID.set_desired_value(yOutput);
     float ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff); // IMU and CF define y opposite to the drone
@@ -759,7 +758,7 @@ void loop() {
 
     xSpeedOutput = xSpeedOutput*500.0 + 1500.0;
     ySpeedOutput = ySpeedOutput*500.0 + 1500.0;
-    zSpeedOutput = zSpeedOutput*500.0 + 1350.0;
+    zSpeedOutput = zSpeedOutput*500.0 + 1400.0;
 
     if (send_pid) {
       if (send_x) {
@@ -769,11 +768,11 @@ void loop() {
         yspeedpid_data.data = ySpeedOutput - 1500.0; 
       } 
       if (send_z) {
-        zspeedpid_data.data = zSpeedOutput - 1350.0; 
+        zspeedpid_data.data = zSpeedOutput - 1400.0; 
       }
     }
 
-    if (zSpeedOutput >1450) zSpeedOutput = 1450;
+    if (zSpeedOutput >1600) zSpeedOutput = 1600;
 
 //    Serial.print("PID done at:\t"); Serial.println(millis() - old_loop_time);
 

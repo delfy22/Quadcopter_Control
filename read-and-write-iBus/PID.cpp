@@ -5,8 +5,6 @@ void PID::set_PID_constants(float kp_in, float ki_in, float kd_in) {
   kp = kp_in;
   ki = ki_in;
   kd = kd_in;
-  I_e = 0;
-  D = 0;
   output = 0;
   old_val = 0;
 }
