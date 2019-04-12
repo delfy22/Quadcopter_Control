@@ -27,12 +27,40 @@ void PID::reset_integral () {
   D = 0;
 }
 
+void PID::saturate_integral (bool sat, float sat_lim) {
+  saturate_int = sat;
+  sat_limit = sat_lim;
+}
+
+float PID::get_PID_val (uint8_t sel) {
+  switch (sel) {
+    case 0: 
+            return e;
+            break;
+    case 1: 
+            return I_e;
+            break;
+    case 2: 
+            return D;
+            break;
+    default:  
+            return 0;
+            break;                        
+  }
+}
+
 // Prototype to calculate PID outputs
 float PID::compute_PID (float current_val, float time_diff) {
   // Compute Error
-  float e = des - current_val;
+  e = des - current_val;
   // Compute Integral
   I_e = I_e + e*time_diff;
+
+  if (saturate_int) {
+    float lower_lim = -sat_limit;
+    I_e = constrain(I_e, lower_lim, sat_limit);
+  }
+  
   // Compute Derivative
   D = (current_val - old_val)/time_diff;
   // Compute PID Output

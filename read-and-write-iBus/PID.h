@@ -11,6 +11,8 @@ class PID {
     void set_desired_value (float des_in);
     void limit_des_val (float lower_lim, float upper_lim);
     void reset_integral ();
+    void saturate_integral (bool sat, float sat_lim);
+    float get_PID_val (uint8_t sel);
 
     // Prototype to calculate PID outputs
     float compute_PID (float current_val, float time_diff);
@@ -19,10 +21,13 @@ class PID {
     float kp;
     float ki;
     float kd; 
+    float e;
     float I_e;
     float D;
     float old_val;
     float des;
     float output;
+    float sat_limit;
+    bool saturate_int;
 };
 

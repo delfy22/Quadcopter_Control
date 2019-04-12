@@ -24,6 +24,7 @@
 #include "PID.h"
 #include "SPIFFS.h"
 #include "FS.h"
+#include "EMA.h"
 
 
 #define IBUS_MAXCHANNELS  14    // iBus has a maximum of 14 channels
@@ -117,9 +118,9 @@ ros::Subscriber<std_msgs::Float32> data_sub_zdes("zdes", &sub_cb_zdes);
 
 bool send_vel   = 1;
 bool send_acc   = 0;
-bool send_x     = 0;
+bool send_x     = 1;
 bool send_y     = 0;
-bool send_z     = 1;
+bool send_z     = 0;
 bool send_pid   = 1;
 bool send_extra = 0;
 
@@ -187,56 +188,6 @@ void setCalibrationOffsets() {
 
   bno.setSensorOffsets(calibrationData);  
 }
-
-//Would like to declare prototype here and define below but isn't working?
-class EMA {
-public:
-  EMA(float a): alpha(a), s_x(0), s_y(0), s_z(0), olds_x(0), olds_y(0), olds_z(0) {} 
-  
-  float getSx(){
-    return s_x;
-  }
-  float getSy(){
-    return s_y;
-  }
-  float getSz(){
-    return s_z;
-  }
-  float getOldSx(){
-    return olds_x;
-  }
-  float getOldSy(){
-    return olds_y;
-  }
-  float getOldSz(){
-    return olds_z;
-  }
-
-  void setSx (float accel_x) {
-    s_x = alpha*accel_x + (1 - alpha)*s_x; // Averaged x acceleration
-  }
-  void setSy (float accel_y) {
-    s_y = alpha*accel_y + (1 - alpha)*s_y; // Averaged y acceleration
-  }
-  void setSz (float accel_z) {
-    s_z = alpha*accel_z + (1 - alpha)*s_z; // Averaged z acceleration
-  }
-
-  void updateOldValues () {
-    olds_x = s_x;
-    olds_y = s_y;
-    olds_z = s_z;
-  }
-
-private:
-  float alpha;
-  float s_x;
-  float s_y;
-  float s_z;
-  float olds_x;
-  float olds_y;
-  float olds_z;
-};
 /***************************************************************************************/
 
 
@@ -361,28 +312,35 @@ void setup() {
 
   // Initialise PID Controllers
   // Initialise with (kp,ki,kd)
-  z_des = 0.3;
+  z_des = 0;
 //  tuning_data[0] = 0; tuning_data[1] = 0; tuning_data[2] = 0;
-  float ini_xy_speed_pid [3] = {0.0575, 0.025, 0};
-  float ini_z_speed_pid [3] = {0.012, 0.08, 0.0025};
+  float ini_xy_speed_pid [3] = {0.0575, 0.025, 0.0};
+  float ini_z_speed_pid [3] = {0.1, 0.035, 0.0};
   for (int i = 0; i<3; i++) {
      tuning_data[i] =  ini_z_speed_pid[i];
   }
 
   xPosPID.set_PID_constants(0,0,0);
   xPosPID.set_desired_value(0.0);
+  xPosPID.saturate_integral(false, 0);
   yPosPID.set_PID_constants(0,0,0);
   yPosPID.set_desired_value(0.0);
+  yPosPID.saturate_integral(false, 0);
   zPosPID.set_PID_constants(0,0,0);
   zPosPID.set_desired_value(0.0);
+  zPosPID.saturate_integral(false, 0);
   xSpeedPID.set_PID_constants(ini_xy_speed_pid[0], ini_xy_speed_pid[1], ini_xy_speed_pid[2]);
   xSpeedPID.set_desired_value(0.0);
+  xSpeedPID.saturate_integral(false, 0);
   ySpeedPID.set_PID_constants(ini_xy_speed_pid[0], ini_xy_speed_pid[1], ini_xy_speed_pid[2]);
   ySpeedPID.set_desired_value(0.0);
+  ySpeedPID.saturate_integral(false, 0);
   zSpeedPID.set_PID_constants(ini_z_speed_pid[0], ini_z_speed_pid[1], ini_z_speed_pid[2]);
   zSpeedPID.set_desired_value(z_des);
+  zSpeedPID.saturate_integral(true, 150);
   yawPosPID.set_PID_constants(0,0,0);
-  yawPosPID.set_desired_value(0.0);  
+  yawPosPID.set_desired_value(0.0); 
+  yawPosPID.saturate_integral(false, 0); 
 
   Serial.println("Finished Setup");
 }
@@ -407,11 +365,11 @@ void loop() {
   static uint8_t sameZCount = 0;
   
   static EMA accelEMA(0.5);
+  static EMA velEMA(0.7);
   static imu::Vector<3> accels;
   static imu::Vector<3> orient;
   
   static uint8_t channel_count = 6;
-//  static uint16_t *channel_data = new uint16_t[channel_count];
   static uint16_t channel_data [6] = {1500, 1500, 1000, 1500, 1000, 1000};
 
   static bool automated = 0;
@@ -528,9 +486,10 @@ void loop() {
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
   
   if (tuning_params_changed) {
-//    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-//    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-    zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+    xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+    ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+//    xSpeedPID.set_desired_value(z_des);
+//    zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
     zSpeedPID.set_desired_value(z_des);
 //    zPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
 //    zPosPID.set_desired_value(z_des);
@@ -561,6 +520,13 @@ void loop() {
       velocities[0] = CF_Vel[0];
       velocities[1] = CF_Vel[1];
       velocities[2] = CF_Vel[2];
+      
+      velEMA.setSx(velocities[0]);
+      velEMA.setSy(velocities[1]);
+      velEMA.setSz(velocities[2]);
+
+      velEMA.updateOldValues();
+      
       yaw = CF_Yaw;
     }
     CF_Read_Time = micros();
@@ -598,22 +564,33 @@ void loop() {
     accels = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL); // Get linear accelerations with gravity accounted for
     
     // Implement moving average filter
-    accelEMA.setSx(accels.x());
-    accelEMA.setSy(accels.y());
-    accelEMA.setSz(accels.z()); 
+    accelEMA.calcSx(accels.x());
+    accelEMA.calcSy(accels.y());
+    accelEMA.calcSz(accels.z()); 
 //    if (sameZCount > 2) {
 //      zAccOffset = accels.z();
 //      velocities[2] = 0.0;
 //    }
-//    accelEMA.setSz(accels.z() - zAccOffset);
+//    accelEMA.calcSz(accels.z() - zAccOffset);
 
     // NOTE: SORT OUT AUTOMATIC CALIBRATION OF IMU
     // Integrate using filtered accelerations and trapezium integration
     if (useIMU) {
-      velocities[0] = velocities[0] + (accelEMA.getSx() + accelEMA.getOldSx())*time_diff/2;
-      velocities[1] = velocities[1] + (accelEMA.getSy() + accelEMA.getOldSy())*time_diff/2;
-      velocities[2] = velocities[2] + (accelEMA.getSz() + accelEMA.getOldSz())*time_diff/2;
+//      velocities[0] = velocities[0] + (accelEMA.getSx() + accelEMA.getOldSx())*time_diff/2;
+//      velocities[1] = velocities[1] + (accelEMA.getSy() + accelEMA.getOldSy())*time_diff/2;
+//      velocities[2] = velocities[2] + (accelEMA.getSz() + accelEMA.getOldSz())*time_diff/2;
 
+      float temp1 = velocities[0] + (accelEMA.getSx() + accelEMA.getOldSx())*time_diff/2;
+      float temp2 = velocities[1] + (accelEMA.getSy() + accelEMA.getOldSy())*time_diff/2;
+      float temp3 = velocities[2] + (accelEMA.getSz() + accelEMA.getOldSz())*time_diff/2;
+
+      velEMA.calcSx(temp1);
+      velEMA.calcSy(temp2);
+      velEMA.calcSz(temp3);
+
+      velocities[0] = velEMA.getSx();
+      velocities[1] = velEMA.getSy();
+      velocities[2] = velEMA.getSz();
     }
 
     if (displayStatus) {
@@ -624,7 +601,8 @@ void loop() {
     }
 
     accelEMA.updateOldValues();
-
+    velEMA.updateOldValues();
+    
     IMU_Read_Time = micros();
   }
 
@@ -739,6 +717,7 @@ void loop() {
     float zPosOutput;
     float yawPosOutput;
 
+//NOTE: Will need to update time_diff here
     if ((micros() - Pos_PID_Time)/1000000.0 > PID_SAMPLE_TIME) {
       // position controller inputs (current_pos, time_diff)
       xPosOutput = xPosPID.compute_PID(current_x, time_diff);
