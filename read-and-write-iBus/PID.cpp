@@ -44,7 +44,7 @@ float PID::get_PID_val (uint8_t sel) {
             return D;
             break;
     default:  
-            return 0;
+            return 0.0;
             break;                        
   }
 }
