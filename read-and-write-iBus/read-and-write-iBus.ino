@@ -33,6 +33,7 @@
 #define IMU_SAMPLE_TIME   0.01  // Set the delay between fresh IMU samples (in S)
 #define CF_SAMPLE_TIME    0.1   // Set the delay between fresh Crazyflie samples (in S)
 #define PID_SAMPLE_TIME   0.1   // Set the loop time for the position PID controllers (in S)
+#define SPIFFS_WRITE_TIME 0.1   // Set the loop time for the writing data to SPIFFS (in S)
 #define LOOP_TIME         10    // Set the main loop time (in mS)
 #define MAX_DRONE_SPEED   2     // If any speeds are above threshold, kill the drone for safety
 #define LOWER_SPEED_LIMIT -0.2   // Limit speed going to speed controllers
@@ -81,6 +82,8 @@ static float CF_Vel [3];
 static float CF_Pos [3];
 static float CF_Yaw;
 static float tuning_data [3];
+static float x_des;
+static float y_des;
 static float z_des;
 static bool tuning_params_changed = 0;
 static bool new_CF_Data = 0;
@@ -112,6 +115,15 @@ void sub_cb_kdtuning (const std_msgs::Float32& data_rec) {
   tuning_data[2] = data_rec.data;
   tuning_params_changed = 1;
 }
+
+void sub_cb_xdes (const std_msgs::Float32& data_rec) {
+  x_des = data_rec.data;
+  tuning_params_changed = 1;
+}
+void sub_cb_ydes (const std_msgs::Float32& data_rec) {
+  y_des = data_rec.data;
+  tuning_params_changed = 1;
+}
 void sub_cb_zdes (const std_msgs::Float32& data_rec) {
   z_des = data_rec.data;
   tuning_params_changed = 1;
@@ -121,19 +133,20 @@ ros::Subscriber<std_msgs::Float32MultiArray> data_sub_loco("loco_data_drone", &s
 ros::Subscriber<std_msgs::Float32> data_sub_kptuning("tuning_data_kp", &sub_cb_kptuning); 
 ros::Subscriber<std_msgs::Float32> data_sub_kituning("tuning_data_ki", &sub_cb_kituning); 
 ros::Subscriber<std_msgs::Float32> data_sub_kdtuning("tuning_data_kd", &sub_cb_kdtuning); 
+ros::Subscriber<std_msgs::Float32> data_sub_xdes("xdes", &sub_cb_xdes);
+ros::Subscriber<std_msgs::Float32> data_sub_ydes("ydes", &sub_cb_ydes);
 ros::Subscriber<std_msgs::Float32> data_sub_zdes("zdes", &sub_cb_zdes);
 
 bool send_vel   = 0;
 bool send_pos   = 1;
 bool send_acc   = 0;
-bool send_x     = 0;
-bool send_y     = 0;
-bool send_z     = 1;
+bool send_x     = 1;
+bool send_y     = 1;
+bool send_z     = 0;
 bool send_pid   = 1;
 bool send_extra = 0;
 
 
-// ChooseTopics
 static std_msgs::Float32 xvel_data;
 ros::Publisher data_pub_xvel("ESP_Data_xvel", &xvel_data); 
 
@@ -203,22 +216,22 @@ void setCalibrationOffsets() {
 
 
 /***************************************************************************************/
-/**************************************SPIFF Stuff**************************************/
+/*************************************SPIFFS Stuff**************************************/
 
 File datalog;
-const char filename[10] = "/data.txt";
+const String filename = "/data";
+uint8_t filename_counter = 0;
+const String filetype = ".txt";
+String file;
 
 void beginSPIFFS () {
   Serial.println("Beginning SPIFF setup");
   SPIFFS.begin(true);
 
-//  datalog = SPIFFS.open(filename, FILE_WRITE);
-//  
-//  datalog.close();
-
-  datalog = SPIFFS.open(filename, FILE_APPEND);
-  datalog.println("\n");
-  datalog.println("XVelocity\tYVelocity\tZVelocity\tTime");
+  // Always write file data0 and leave blank so on start up this is the file that's overwritten
+  file = filename + String(filename_counter++) + filetype;
+  datalog = SPIFFS.open(file, FILE_WRITE);
+  datalog.close();
   
   Serial.println("Finished SPIFF setup");
 }
@@ -231,12 +244,12 @@ void beginSPIFFS () {
 /******************************Setup****************************************************/
 void setup() {
 
-  iBus.begin(iBus_serial); // Open the iBus serial connection - do before Serial.begin as occasionally it hangs, possibly interference between the two?
+  iBus.begin(iBus_serial); // Open the iBus serial connection
   
   Serial.begin(115200); // Serial Monitor
-  connectToNetwork(); // Connect to the Wifi - uncomment for Wifi comms, comment for USB
+  connectToNetwork(); // Connect to the Wifi
 
-//  beginSPIFFS();
+  beginSPIFFS();
 
   Serial.println("Connecting to IMU");
   bno.begin();
@@ -259,9 +272,9 @@ void setup() {
 //  IPAddress serverIp(10,1,0,169);      // rosserial socket ROSCORE SERVER IP address  
   uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
   nh.initNode();
-  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info - uncomment for Wifi comms, comment for USB
+  nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info
 
-  // ChooseTopics
+  // Only advertise topics we're interested in, seems to reduce load and stop it from hanging on ROS functions
   if (send_vel) {
     if (send_x) {
       xvel_data.data = 0.0;
@@ -320,6 +333,8 @@ void setup() {
   nh.subscribe(data_sub_kptuning);
   nh.subscribe(data_sub_kituning);
   nh.subscribe(data_sub_kdtuning);
+  nh.subscribe(data_sub_xdes);
+  nh.subscribe(data_sub_ydes);
   nh.subscribe(data_sub_zdes);
 
   Serial.println("ROS finished setup");
@@ -341,13 +356,11 @@ void loop() {
   static unsigned long IMU_Read_Time = start_time - IMU_SAMPLE_TIME;
   static unsigned long CF_Read_Time = start_time - CF_SAMPLE_TIME;
   static unsigned long pos_PID_time = start_time - PID_SAMPLE_TIME;
+  static unsigned long old_write_time = start_time - SPIFFS_WRITE_TIME;
   static float time_diff = 0.0;
 
-  static float old_z_position = 0;
   static float velocities [3] = {0.0, 0.0, 0.0}; // holds [x vel, y vel, z vel]
   static float yaw = 0.0;
-  static float zAccOffset = 0.0;
-  static uint8_t sameZCount = 0;
   
   static EMA accelEMA(0.5);
   static EMA velEMA(0.15);
@@ -358,6 +371,7 @@ void loop() {
   static uint16_t channel_data [6] = {1500, 1500, 1000, 1500, 1000, 1000};
 
   static bool automated = 0;
+  static bool automated_running = 0;
   static bool armed = 0;
   static bool remote_lost = 0;
   static bool displayStatus = 0; // 0 for no serial output about controller values, 1 for information
@@ -417,12 +431,7 @@ void loop() {
 /***************************************************************************************/
 /***********************************Receive ROS Data************************************/
 
-//  unsigned long time1, time2, time3, time4, time5;
-//    time1 = millis();
-
   // Set the data to be sent back to ROS.  
-  // ChooseTopic
-
   if (send_vel) {
     if (send_x) {
       xvel_data.data = velocities[0];
@@ -441,17 +450,14 @@ void loop() {
   if (send_acc) {
     if (send_x) {
       xacc_data.data = accelEMA.getSx();
-    //      xacc_data.data = accels.z();
       data_pub_xacc.publish(&xacc_data);
     }
     if (send_y) {
       yacc_data.data = accelEMA.getSy();
-    //      yacc_data.data = accels.y();
       data_pub_yacc.publish(&yacc_data);
     }
     if (send_z) {
       zacc_data.data = accelEMA.getSz();
-    //      zacc_data.data = accels.z();
       data_pub_zacc.publish(&zacc_data);
     }
   }
@@ -482,6 +488,8 @@ void loop() {
 //    zSpeedPID.set_desired_value(z_des);
 
 //    zPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+    xPosPID.set_desired_value(x_des);
+    yPosPID.set_desired_value(y_des);   
     zPosPID.set_desired_value(z_des);
 
     xPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
@@ -490,25 +498,14 @@ void loop() {
     tuning_params_changed = 0;
   }
 
-//  time2 = millis();
-
 //  Serial.print("ROS done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 
 /***************************************************************************************/
 /************************************Read CF Data***************************************/
   // Correct IMU velocities using readings from the crazyflie
-  // NOTE: maybe use flags to see if data has changed?
   time_diff = (micros() - CF_Read_Time)/1000000.0;
-  bool cond1 = 0;
-  bool cond2 = 0;
-  bool cond3 = 0;
-  bool cond4 = 0;
-  bool cond5 = 0;
-  cond1 = time_diff > CF_SAMPLE_TIME;
-  cond2 = time_diff > (2*CF_SAMPLE_TIME);
-  cond3 = sq(CF_Vel[2] - old_z_position) > 0.00016; // check if z position changes by more than 4mm
-  cond4 = CF_Vel[2] == old_z_position; // measurements should not be identical unless we read before a new one is ready
+  
   if (new_CF_Data) {
     if (useCF) {
       velocities[0] = CF_Vel[0];
@@ -528,12 +525,13 @@ void loop() {
   }
 
   time_diff = (micros() - CF_Read_Time)/1000000.0;
-  cond5 = time_diff > 1; // check if we haven't had CF data for at least a second, if so disarm drone.
-  if (cond5) { 
+  
+  // check if we haven't had CF data for at least a second, if so disarm drone.
+  if (time_diff > 1) { 
     armed = 0;
     errorType = 4;
   }
-//  
+  
 //  Serial.print("CF done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 /************************************Read IMU Data**************************************/
@@ -561,18 +559,10 @@ void loop() {
     accelEMA.calcSx(accels.x());
     accelEMA.calcSy(accels.y());
     accelEMA.calcSz(accels.z()); 
-//    if (sameZCount > 2) {
-//      zAccOffset = accels.z();
-//      velocities[2] = 0.0;
-//    }
-//    accelEMA.calcSz(accels.z() - zAccOffset);
 
     // NOTE: SORT OUT AUTOMATIC CALIBRATION OF IMU
     // Integrate using filtered accelerations and trapezium integration
     if (useIMU) {
-//      velocities[0] = velocities[0] + (accelEMA.getSx() + accelEMA.getOldSx())*time_diff/2;
-//      velocities[1] = velocities[1] + (accelEMA.getSy() + accelEMA.getOldSy())*time_diff/2;
-//      velocities[2] = velocities[2] + (accelEMA.getSz() + accelEMA.getOldSz())*time_diff/2;
 
       float temp1 = velocities[0] + (accelEMA.getSx() + accelEMA.getOldSx())*time_diff/2;
       float temp2 = velocities[1] + (accelEMA.getSy() + accelEMA.getOldSy())*time_diff/2;
@@ -608,45 +598,14 @@ void loop() {
     if(displayStatus) Serial.println("TOO FAST!");
     errorType = 3;
   }
-  
-//  time3 = millis();
 
-//  if (loop_count > 3) {
-//    if (datalog.size() > 950000) { // check to see if the flash is filling up (950kB)
-//      Serial.println(datalog.size());
-//      datalog.close();
-//      
-//      datalog = SPIFFS.open(filename, FILE_WRITE);  
-//      datalog.close();
-//
-//      datalog = SPIFFS.open(filename, FILE_APPEND);
-//      datalog.println("\n");
-//      datalog.println("XVelocity\tYVelocity\tZVelocity\tTime");
-//          
-//    }
-//
-//    String data2print = String(velocities[0], 5) + "\t" + String(velocities[1], 5) + "\t" + String(velocities[2], 5) + "\t" + String(micros() - start_time) + "\n";
-//  
-////    time4 = millis();
-//  
-//    datalog.print(data2print);
-//    loop_count = 0;
-//  }
-//
-//  loop_count++;
-  
-//  datalog.print(velocities[0],5); datalog.print("\t");
-//  datalog.print(velocities[1],5); datalog.print("\t");
-//  datalog.print(velocities[2],5); datalog.print("\t");
-//  datalog.print(micros() - start_time); datalog.print("\n");
-
-//    time5 = millis();
-  
 //  Serial.print("IMU done at:\t"); Serial.println(millis() - old_loop_time);
 /***************************************************************************************/
 
   // If we're in manual mode, pass data read from receiver to the FCU
   if (!automated) {
+    automated_running = 0;
+    
     if (displayStatus) Serial.print("Data received is: ");
     
     for (uint8_t i = 0; i < channel_count; i++) {
@@ -704,7 +663,7 @@ void loop() {
     float current_pitch = orient[2]; // NEED TO CHECK THESE
     float current_roll = orient[1];
     float current_yaw = orient[0];
-
+    
 /***************************************************************************************/
 /****************************Position and Speed Controllers*****************************/
     float xPosOutput;
@@ -721,37 +680,35 @@ void loop() {
       xPosOutput = xPosPID.compute_PID(current_x, time_diff);
       yPosOutput = yPosPID.compute_PID(current_y, time_diff);
       zPosOutput = zPosPID.compute_PID(current_z, time_diff);
-      if (zPosOutput > 0.5) {
-        Serial.print((zPosPID.get_PID_val(0))); Serial.print("\t");
-        Serial.print((zPosPID.get_PID_val(1))); Serial.print("\t");
-        Serial.print((zPosPID.get_PID_val(2))); Serial.println("\t");
-      }
 //      yawPosOutput = yawPosPID.compute_PID(current_yaw, time_diff);
       pos_PID_time = current_time;
-      Serial.print(current_z); Serial.print("\t");
-      Serial.print(zPosOutput); Serial.println("\t");
     }
 
-    if (zPosOutput > 0.5) {
-        Serial.print((zPosPID.get_PID_val(0))); Serial.print("\t");
-        Serial.print((zPosPID.get_PID_val(1))); Serial.print("\t");
-        Serial.print((zPosPID.get_PID_val(2))); Serial.println("\t");
-      }
-
+    // NOTE: We'll need to take account of the yaw to convert output from position controllers to input for velocity controllers
+    
     // Calculate time difference for speed PID controllers
     current_time = micros();
     time_diff = (current_time - old_PID_time)/1000000.0; // micros() time overflows after 70 mins but this difference will still be correct as it also overflows
 
+    // To take off, ascend at a very low speed until we're airborne and don't control xy until then.
+    if ((current_time - start_time) < 2) {
+      xSpeedPID.set_desired_value(0);
+      ySpeedPID.set_desired_value(0);
+      zSpeedPID.set_desired_value(0.07);
+    }
+    else {
+      xSpeedPID.set_desired_value(xPosOutput);
+      ySpeedPID.set_desired_value(yPosOutput);
+      zSpeedPID.set_desired_value(zPosOutput);
+    }
+
     // speed controller inputs (current_speed, time_diff)
-    xSpeedPID.set_desired_value(xPosOutput);
     xSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
     float xSpeedOutput = xSpeedPID.compute_PID(current_xspeed, time_diff);
     
-    ySpeedPID.set_desired_value(yPosOutput);
     ySpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
     float ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff); // IMU and CF define y opposite to the drone
-    
-    zSpeedPID.set_desired_value(zPosOutput);
+
     zSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
     float zSpeedOutput = zSpeedPID.compute_PID(current_zspeed, time_diff);
 
@@ -794,6 +751,49 @@ void loop() {
 //    float rollOutput = positionController.compute_desired_roll(current_roll)*500 + 1500;
 /***************************************************************************************/
 
+/***************************************************************************************/
+/************************************Recording Data*************************************/    
+    bool cond1 = filename_counter < 10;
+    bool cond2 = SPIFFS.usedBytes() < ( (size_t)( 0.9*(float)(SPIFFS.totalBytes()) ) );
+    bool cond3 = ((micros() - old_write_time)/1000000) >= SPIFFS_WRITE_TIME;
+    bool cond = cond1 || cond2;
+    bool condWriteToFile = cond && cond3;
+    // Start a new file and begin logging data.
+    if (!automated_running) {
+      // Begin a new file if we haven't exceed max number of files in FS and we haven't used up all the space
+      if (cond) {
+        // Close old file
+        datalog.close();   
+        
+        // Change filename by incrementing the number at the end
+        file = filename + String(filename_counter++) + filetype;
+        
+        // Create a new file
+        datalog = SPIFFS.open(file, FILE_WRITE);  
+        datalog.close();      
+
+        // Open the new file and write headers
+        datalog = SPIFFS.open(file, FILE_APPEND);
+        datalog.println("\n");
+        datalog.println("Time\tXVelocity\tYVelocity\tZVelocity\tXPos\tYPos\tZPos\tXVelPID\tYVelPID\tZVelPID\tXPosPID\tYPosPID\tZPosPID");
+      }      
+      automated_running = 1;
+    }
+
+    // Write data to our file if we haven't exceed max number of files in FS and we haven't used up all the space, should only write once every 0.1s
+    if (condWriteToFile) {
+        // Format: Time, Xvel, Yvel, Zvel, XPos, YPos, ZPos
+        String data2print = String(micros() - start_time) + "\t" + String(current_xspeed, 5) + "\t" + String(current_yspeed, 5) + "\t" + String(current_zspeed, 5) + "\t" 
+                            + String(current_x, 5) + "\t" + String(current_y, 5) + "\t" + String(current_z, 5) + "\t"
+                            + String(xSpeedOutput, 5) + "\t" + String(ySpeedOutput, 5) + "\t" + String(zSpeedOutput, 5) + "\t"
+                            + String(xPosOutput, 5) + "\t" + String(yPosOutput, 5) + "\t" + String(zPosOutput, 5) + "\n";
+      
+        datalog.print(data2print);
+
+        old_write_time = micros();
+    }
+/***************************************************************************************/
+
 
 //    set_outputs( rollOutput, pitchOutput, zOutput, desired_yaw, 1500, 2000 ); // last 2 values are armed and automated controls
     if (iBus.readChannel(4) > 1600) { 
@@ -816,7 +816,6 @@ void loop() {
     if (displayStatus) Serial.println("Entering Safe State");
   }
   
-  // NOTE: Should there be checks to ensure we're writing new data?
   iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send one frame to be written
 
   if (send_extra) {
@@ -886,20 +885,11 @@ void loop() {
     Serial.println();
   }
 
-//  Serial.print("\n");
   // Ensure loop runs at the correct rate
   time_diff = millis() - old_loop_time;
 //  if (time_diff > 11) {
 //    Serial.println("\nHELP *********************************************************");
 //    Serial.print("Loop time is: "); Serial.println(time_diff);
-//
-//    Serial.println("ROS Times: ");
-//    Serial.print(time1); Serial.print("\t");
-//    Serial.print(time2); Serial.print("\t");
-//    Serial.print(time3); Serial.print("\t");
-//    Serial.print(time4); Serial.print("\t");
-//    Serial.println(time5); 
-//    Serial.print("\n");
 //  }
     
   if (time_diff < LOOP_TIME) {
@@ -940,25 +930,29 @@ uint16_t saturateiBusCommand (uint16_t val) {
 void setupPIDControllers () {
   
   // Initial desired z position
-  z_des = 0.5;
+  x_des = 1;
+  y_des = 1;
+  z_des = 0.25;
 
   // Initial PID controller constants
-  float ini_xy_speed_pid [3] = {0.085, 0.1, 0.0};
+  float ini_xy_speed_pid [3] = {0.095, 0.02, 0.0};
   float ini_z_speed_pid [3] = {0.55, 0.65, 0.0002};
-  float ini_xy_pos_pid [3] = {0.1, 0.0, 0};
+  float ini_xy_pos_pid [3] = {0.3, 0.0, 0};
   float ini_z_pos_pid [3] = {0.55, 0.03, 0};
   
   
   for (int i = 0; i<3; i++) {
 //    tuning_data[i] =  ini_z_speed_pid[i];
-    tuning_data[i] =  ini_z_pos_pid[i]; 
+//    tuning_data[i] =  ini_z_pos_pid[i]; 
+//    tuning_data[i] =  ini_xy_speed_pid[i]; 
+    tuning_data[i] =  ini_xy_pos_pid[i]; 
   }
   
   xPosPID.set_PID_constants(ini_xy_pos_pid[0], ini_xy_pos_pid[1], ini_xy_pos_pid[2]);
-  xPosPID.set_desired_value(1);
+  xPosPID.set_desired_value(x_des);
   xPosPID.saturate_integral(false, 0);
   yPosPID.set_PID_constants(ini_xy_pos_pid[0], ini_xy_pos_pid[1], ini_xy_pos_pid[2]);
-  yPosPID.set_desired_value(1);
+  yPosPID.set_desired_value(y_des);
   yPosPID.saturate_integral(false, 0);
   zPosPID.set_PID_constants(ini_z_pos_pid[0], ini_z_pos_pid[1], ini_z_pos_pid[2]);
   zPosPID.set_desired_value(z_des);
