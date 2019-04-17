@@ -4,7 +4,7 @@
 class PID {
   public:
     // Constructor
-    PID () : kp(0.0), ki(0.0), kd(0.0), I_e(0.0), D(0.0), old_val(0.0), des(0.0), output(0.0) {}
+    PID () : kp(0.0), ki(0.0), kd(0.0), I_e(0.0), D(0.0), old_val(0.0), des(0.0), output(0.0), sat_limit(0.0), saturate_int(0) {}
     
     // Prototype to set PID parameters
     void set_PID_constants (float kp_in, float ki_in, float kd_in);
