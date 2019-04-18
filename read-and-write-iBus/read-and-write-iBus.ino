@@ -35,7 +35,7 @@
 #define PID_SAMPLE_TIME   0.1   // Set the loop time for the position PID controllers (in S)
 #define SPIFFS_WRITE_TIME 0.03  // Set the loop time for the writing data to SPIFFS (in S)
 #define LOOP_TIME         10    // Set the main loop time (in mS)
-#define MAX_DRONE_SPEED   2     // If any speeds are above threshold, kill the drone for safety
+#define MAX_DRONE_SPEED   1.5     // If any speeds are above threshold, kill the drone for safety
 #define LOWER_SPEED_LIMIT -0.2  // Limit speed going to speed controllers
 #define UPPER_SPEED_LIMIT 0.2   // Limit speed going to speed controllers
 
@@ -45,11 +45,13 @@
 bool send_vel   = 0;
 bool send_pos   = 1;
 bool send_acc   = 0;
-bool send_x     = 0;
-bool send_y     = 0;
+bool send_x     = 1;
+bool send_y     = 1;
 bool send_z     = 1;
 bool send_pid   = 1;
 bool send_extra = 1;
+
+static float ini_z_speed_pid [3];
 
 // PID Objects
 PID xPosPID;
@@ -190,9 +192,9 @@ ros::NodeHandle nh;
 /***************************************************************************************/
 /******************************Setup****************************************************/
 void setup() {
-
+  delay(2);
   iBus.begin(iBus_serial); // Open the iBus serial connection
-  
+  delay(2);
   Serial.begin(115200); // Serial Monitor
   connectToNetwork(); // Connect to the Wifi
 
@@ -203,6 +205,7 @@ void setup() {
   delay(20);
   bno.setExtCrystalUse(true);
   setCalibrationOffsets();
+  delay(2);
   // Set IMU mode to nine degrees of freedom (found in BN055 datasheet)
   bno.setMode(Adafruit_BNO055::OPERATION_MODE_NDOF);
   delay(20);
@@ -219,7 +222,9 @@ void setup() {
 //  IPAddress serverIp(10,0,0,169);      // rosserial socket ROSCORE SERVER IP address  
   uint16_t serverPort = 11411; // rosserial socket server port - NOT roscore socket!
   nh.initNode();
+  delay(20);
   nh.getHardware()->setConnection(serverIp, serverPort); // Set the rosserial socket server info
+  delay(20);
 
   // Only advertise topics we're interested in, seems to reduce load and stop it from hanging on ROS functions
   if (send_vel) {
@@ -291,6 +296,10 @@ void setup() {
   nh.subscribe(data_sub_xdes);
   nh.subscribe(data_sub_ydes);
   nh.subscribe(data_sub_zdes);
+  
+  delay(10);
+
+  nh.spinOnce();
 
   Serial.println("ROS finished setup");
 
@@ -676,18 +685,20 @@ void loop() {
       // Calculate time difference for speed PID controllers
       current_time = micros();
       time_diff = (current_time - old_PID_time)/1000000.0; 
+
+      Serial.print("PID Vals: "); Serial.print(zSpeedPID.get_PID_val(0)); Serial.print("\t"); Serial.print(zSpeedPID.get_PID_val(1)); Serial.print("\t"); Serial.println(zSpeedPID.get_PID_val(2)); 
   
       // To take off, ascend at a very low speed until we're airborne and don't move xy until then.
       if ((current_time - flying_start_time)/1000000.0 < 2.5) {
         takeoff = 1;
-        zSpeedPID.set_PID_constants(0.2, 0.65, 0.0);
+        zSpeedPID.set_PID_constants(0.15, 0.6, 0.0);
         xSpeedPID.set_desired_value(0);
         ySpeedPID.set_desired_value(0);
         zSpeedPID.set_desired_value(0.07);
       }
       else {
         if (takeoff) {
-          zSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+          zSpeedPID.set_PID_constants(ini_z_speed_pid[0], ini_z_speed_pid[1], ini_z_speed_pid[2]);
           takeoff = 0;
         }
         
@@ -773,44 +784,44 @@ void loop() {
 
 /***************************************************************************************/
 /************************************Recording Data*************************************/    
-//    bool cond1 = filename_counter < 10;
-//    bool cond2 = SPIFFS.usedBytes() < ( (size_t)( 0.9*(float)(SPIFFS.totalBytes()) ) );
-//    bool cond3 = ((micros() - old_write_time)/1000000.0) >= SPIFFS_WRITE_TIME;
-//    bool cond = cond1 || cond2;
-//    bool condWriteToFile = cond && cond3 && automated_running;
-//    // Start a new file and begin logging data.
-//    if (!automated_running) {
-//      // Begin a new file if we haven't exceed max number of files in FS and we haven't used up all the space
-//      if (cond1) {
-//        // Close old file
-//        datalog.close();   
-//        
-//        // Change filename by incrementing the number at the end
-//        file = filename + String(filename_counter++) + filetype;
-//        
-//        // Create a new file
-//        datalog = SPIFFS.open(file, FILE_WRITE);  
-//        datalog.close();      
-//
-//        // Open the new file and write headers
-//        datalog = SPIFFS.open(file, FILE_APPEND);
-//        datalog.print("Time\tXVelocity\tYVelocity\tZVelocity\tXPos\tYPos\tZPos\tXVelPID\tYVelPID\tZVelPID\tXPosPID\tYPosPID\tZPosPID");
-//      }      
-//      automated_running = 1;
-//    }
-//
-//    // Write data to our file if we haven't exceed max number of files in FS and we haven't used up all the space, should only write once every 0.1s
-//    if (condWriteToFile) {
-//        // Format: Time, Xvel, Yvel, Zvel, XPos, YPos, ZPos, XvelPID, YvelPID, ZvelPID, XPosPID, YPosPID, ZPosPID, 
-//        String data2print = "\n" + String(micros() - start_time) + "\t" + String(current_xspeed, 5) + "\t" + String(current_yspeed, 5) + "\t" + String(current_zspeed, 5) + "\t" 
-//                            + String(current_x, 5) + "\t" + String(current_y, 5) + "\t" + String(current_z, 5) + "\t"
-//                            + String(xSpeedOutput, 5) + "\t" + String(ySpeedOutput, 5) + "\t" + String(zSpeedOutput, 5) + "\t"
-//                            + String(xPosOutput, 5) + "\t" + String(yPosOutput, 5) + "\t" + String(zPosOutput, 5);
-//      
-//        datalog.print(data2print);
-//
-//        old_write_time = micros();
-//    }
+    bool cond1 = filename_counter < 10;
+    bool cond2 = SPIFFS.usedBytes() < ( (size_t)( 0.9*(float)(SPIFFS.totalBytes()) ) );
+    bool cond3 = ((micros() - old_write_time)/1000000.0) >= SPIFFS_WRITE_TIME;
+    bool cond = cond1 || cond2;
+    bool condWriteToFile = cond && cond3 && automated_running;
+    // Start a new file and begin logging data.
+    if (!automated_running) {
+      // Begin a new file if we haven't exceed max number of files in FS and we haven't used up all the space
+      if (cond1) {
+        // Close old file
+        datalog.close();   
+        
+        // Change filename by incrementing the number at the end
+        file = filename + String(filename_counter++) + filetype;
+        
+        // Create a new file
+        datalog = SPIFFS.open(file, FILE_WRITE);  
+        datalog.close();      
+
+        // Open the new file and write headers
+        datalog = SPIFFS.open(file, FILE_APPEND);
+        datalog.print("Time\tXVelocity\tYVelocity\tZVelocity\tXPos\tYPos\tZPos\tXVelPID\tYVelPID\tZVelPID\tXPosPID\tYPosPID\tZPosPID");
+      }      
+      automated_running = 1;
+    }
+
+    // Write data to our file if we haven't exceed max number of files in FS and we haven't used up all the space, should only write once every 0.1s
+    if (condWriteToFile) {
+        // Format: Time, Xvel, Yvel, Zvel, XPos, YPos, ZPos, XvelPID, YvelPID, ZvelPID, XPosPID, YPosPID, ZPosPID, 
+        String data2print = "\n" + String(micros() - start_time) + "\t" + String(current_xspeed, 5) + "\t" + String(current_yspeed, 5) + "\t" + String(current_zspeed, 5) + "\t" 
+                            + String(current_x, 5) + "\t" + String(current_y, 5) + "\t" + String(current_z, 5) + "\t"
+                            + String(xSpeedOutput, 5) + "\t" + String(ySpeedOutput, 5) + "\t" + String(zSpeedOutput, 5) + "\t"
+                            + String(xPosOutput, 5) + "\t" + String(yPosOutput, 5) + "\t" + String(zPosOutput, 5);
+      
+        datalog.print(data2print);
+
+        old_write_time = micros();
+    }
 /***************************************************************************************/
 
 
@@ -1019,7 +1030,7 @@ void setupPIDControllers () {
 
   // Initial PID controller constants
   float ini_xy_speed_pid [3] = {0.12, 0.062, 0.0};
-  float ini_z_speed_pid [3] = {0.55, 0.65, 0.0002};
+  ini_z_speed_pid[0] = 0.55; ini_z_speed_pid[1] = 0.65; ini_z_speed_pid[2] = 0.0002;
   float ini_xy_pos_pid [3] = {0.43, 0.045, 0};
   float ini_z_pos_pid [3] = {0.55, 0.03, 0};
   
