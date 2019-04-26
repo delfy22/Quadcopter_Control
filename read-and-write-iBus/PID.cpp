@@ -14,12 +14,13 @@ void PID::set_desired_value(float des_in) {
 }
 
 void PID::limit_des_val(float lower_lim, float upper_lim) {
-  if (des < lower_lim) {
-    des = lower_lim;
-  }
-  else if (des > upper_lim) {
-    des = upper_lim;
-  }
+//  if (des < lower_lim) {
+//    des = lower_lim;
+//  }
+//  else if (des > upper_lim) {
+//    des = upper_lim;
+//  }
+  des = constrain(des, lower_lim, upper_lim);
 }
 
 void PID::reset_integral () {
@@ -42,6 +43,9 @@ float PID::get_PID_val (uint8_t sel) {
             break;
     case 2: 
             return D;
+            break;
+    case 3: 
+            return output;
             break;
     default:  
             return 0.0;

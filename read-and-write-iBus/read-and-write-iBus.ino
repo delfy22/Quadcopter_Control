@@ -39,17 +39,17 @@
 #define LOWER_SPEED_LIMIT -0.2  // Limit speed going to speed controllers
 #define UPPER_SPEED_LIMIT 0.2   // Limit speed going to speed controllers
 
-#define PID_TUNING 3 // 0-zvel, 1-zpos, 2-xyvel, 3-xypos
+#define PID_TUNING 2 // 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xypos
 
 // Choose ROS topics
 bool send_vel   = 0;
-bool send_pos   = 1;
-bool send_acc   = 0;
-bool send_x     = 1;
-bool send_y     = 1;
+bool send_pos   = 0;
+bool send_acc   = 1;
+bool send_x     = 0;
+bool send_y     = 0;
 bool send_z     = 1;
-bool send_pid   = 1;
-bool send_extra = 1;
+bool send_pid   = 0;
+bool send_extra = 0;
 
 static float ini_z_speed_pid [3];
 
@@ -257,30 +257,33 @@ void setup() {
     }
   }
 
+  if (send_pos) {
+    if (send_x) {
+      xpospid_data.data = 0.0;
+      nh.advertise(data_pub_xposPID);
+    }
+    if (send_y) {
+      ypospid_data.data = 0.0;
+      nh.advertise(data_pub_yposPID);
+    }
+    if (send_z) {
+      zpospid_data.data = 0.0;
+      nh.advertise(data_pub_zposPID);
+    }
+  }
+
   if (send_pid) {
     if (send_x) {
       xspeedpid_data.data = 0.0;  
       nh.advertise(data_pub_xPID);
-      if (send_pos) {
-        xpospid_data.data = 0.0;
-        nh.advertise(data_pub_xposPID);
-      }
     }
     if (send_y) {
       yspeedpid_data.data = 0.0;
       nh.advertise(data_pub_yPID);
-      if (send_pos) {
-        ypospid_data.data = 0.0;
-        nh.advertise(data_pub_yposPID);
-      }
     }
     if (send_z) {
       zspeedpid_data.data = 0.0;
       nh.advertise(data_pub_zPID);
-      if (send_pos) {
-        zpospid_data.data = 0.0;
-        nh.advertise(data_pub_zposPID);
-      }
     }
   }
 
@@ -328,7 +331,10 @@ void loop() {
   static float yaw = 0.0;
   
   static EMA accelEMA(0.5);
+  static EMA CFEMA(0.15);
   static EMA velEMA(0.15);
+  static EMA pidEMA(0.7);
+  
   static imu::Vector<3> accels;
   static imu::Vector<3> orient;
   
@@ -339,7 +345,7 @@ void loop() {
   static bool automated_running = 0;
   static bool armed = 0;
   static bool remote_lost = 0;
-  static bool displayStatus = 1; // 0 for no serial output about controller values, 1 for information
+  static bool displayStatus = 0; // 0 for no serial output about controller values, 1 for information
   static bool useIMU = 1;
   static bool useCF = 1;
   static uint8_t errorType = 0;
@@ -427,30 +433,33 @@ void loop() {
     }
   }
 
+  if (send_pos) {
+      if (send_x) {
+        data_pub_xposPID.publish(&xpospid_data);
+      }
+      if (send_y) {
+        data_pub_yposPID.publish(&ypospid_data);
+      }
+      if (send_z) {
+        data_pub_zposPID.publish(&zpospid_data);
+      }
+    }
+
   if (send_pid) {
     if (send_x) {
       data_pub_xPID.publish(&xspeedpid_data);
-      if (send_pos) {
-        data_pub_xposPID.publish(&xpospid_data);
-      }
     }
     if (send_y) {
       data_pub_yPID.publish(&yspeedpid_data);
-      if (send_pos) {
-        data_pub_yposPID.publish(&ypospid_data);
-      }
     }
     if (send_z) {
       data_pub_zPID.publish(&zspeedpid_data);
-      if (send_pos) {
-        data_pub_zposPID.publish(&zpospid_data);
-      }
     }
   }
 
   nh.spinOnce(); // Send data and call subscriber callback to receive any data.
 
-  // Change tuning values - PID_TUNING 0-zvel, 1-zpos, 2-xyvel, 3-xypos
+  // Change tuning values - PID_TUNING 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xypos
   if (tuning_params_changed) {
     switch (PID_TUNING) {
       case 0:
@@ -461,11 +470,12 @@ void loop() {
                 break;
       case 2:
                 xSpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-                ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
                 break;
       case 3:
-                xPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
-                yPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+                ySpeedPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]);
+                break;
+      case 4:
+                xPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]); // yPosPID.set_PID_constants(tuning_data[0], tuning_data[1], tuning_data[2]); 
                 break;
       default:
                 break;
@@ -488,13 +498,21 @@ void loop() {
   
   if (new_CF_Data) {
     if (useCF) {
-      velocities[0] = CF_Vel[0];
-      velocities[1] = CF_Vel[1];
-      velocities[2] = CF_Vel[2];
-      
-      velEMA.setSx(velocities[0]);
-      velEMA.setSy(velocities[1]);
-      velEMA.setSz(velocities[2]);
+//      velocities[0] = CF_Vel[0];
+//      velocities[1] = CF_Vel[1];
+//      velocities[2] = CF_Vel[2];
+//      
+//      velEMA.setSx(velocities[0]);
+//      velEMA.setSy(velocities[1]);
+//      velEMA.setSz(velocities[2]);
+
+      velEMA.calcSx(CF_Vel[0]);
+      velEMA.calcSy(CF_Vel[1]);
+      velEMA.calcSz(CF_Vel[2]);
+
+      velocities[0] = velEMA.getSx();
+      velocities[1] = velEMA.getSy();
+      velocities[2] = velEMA.getSz();
 
       velEMA.updateOldValues();
       
@@ -651,6 +669,13 @@ void loop() {
     static float ySpeedOutput = 0.0;
     static float zSpeedOutput = -0.8; // Brings throttle output to below 1000
 
+    static float xSpeedOutputStar = 0.0; 
+    static float ySpeedOutputStar = 0.0;
+    static float zSpeedOutputStar = -0.8;
+    static float zPosOutputStar = 0;
+    float timeConstVel = 0.1;
+    float timeConstPos = 0.2;
+
     static bool takeoff = 0;
 
     static unsigned long current_time;
@@ -665,6 +690,11 @@ void loop() {
         pos_PID_time = current_time - 2;
         old_PID_time = current_time - 2;
         flying = 1;
+
+        // DO EMA's
+//        pidEMA.setSx(0);
+//        pidEMA.setSy(0);
+//        pidEMA.setSz(0);
       }
 
       // Calculate time difference for position PID controllers 
@@ -678,6 +708,9 @@ void loop() {
         zPosOutput = zPosPID.compute_PID(current_z, time_diff);
   //      yawPosOutput = yawPosPID.compute_PID(current_yaw, time_diff);
         pos_PID_time = current_time;
+
+        zPosOutputStar = zPosOutputStar + (time_diff/timeConstPos)*(zPosOutput - zPosOutputStar);
+        zPosOutput = zPosOutputStar;
       }
   
       // NOTE: We'll need to take account of the yaw to convert output from position controllers to input for velocity controllers
@@ -686,26 +719,9 @@ void loop() {
       current_time = micros();
       time_diff = (current_time - old_PID_time)/1000000.0; 
 
-      Serial.print("PID Vals: "); Serial.print(zSpeedPID.get_PID_val(0)); Serial.print("\t"); Serial.print(zSpeedPID.get_PID_val(1)); Serial.print("\t"); Serial.println(zSpeedPID.get_PID_val(2)); 
-  
-      // To take off, ascend at a very low speed until we're airborne and don't move xy until then.
-      if ((current_time - flying_start_time)/1000000.0 < 2.5) {
-        takeoff = 1;
-        zSpeedPID.set_PID_constants(0.15, 0.6, 0.0);
-        xSpeedPID.set_desired_value(0);
-        ySpeedPID.set_desired_value(0);
-        zSpeedPID.set_desired_value(0.07);
-      }
-      else {
-        if (takeoff) {
-          zSpeedPID.set_PID_constants(ini_z_speed_pid[0], ini_z_speed_pid[1], ini_z_speed_pid[2]);
-          takeoff = 0;
-        }
-        
-        xSpeedPID.set_desired_value(xPosOutput);
-        ySpeedPID.set_desired_value(yPosOutput);
-        zSpeedPID.set_desired_value(zPosOutput);
-      }
+      xSpeedPID.set_desired_value(xPosOutput);
+      ySpeedPID.set_desired_value(yPosOutput);
+      zSpeedPID.set_desired_value(zPosOutput);  
   
       // speed controller inputs (current_speed, time_diff)
       xSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
@@ -716,22 +732,60 @@ void loop() {
   
       zSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
       zSpeedOutput = zSpeedPID.compute_PID(current_zspeed, time_diff);
+
+//      pidEMA.calcSx(xSpeedOutput);
+//      pidEMA.calcSy(ySpeedOutput);
+//      pidEMA.calcSz(zSpeedOutput);
+//
+//      xSpeedOutput = pidEMA.getSx();
+//      ySpeedOutput = pidEMA.getSy();
+//      zSpeedOutput = pidEMA.getSz();
+      
+      xSpeedOutputStar = xSpeedOutputStar + (time_diff/timeConstVel)*(xSpeedOutput - xSpeedOutputStar);
+      xSpeedOutput = xSpeedOutputStar;
+
+      ySpeedOutputStar = ySpeedOutputStar + (time_diff/timeConstVel)*(ySpeedOutput - ySpeedOutputStar);
+      ySpeedOutput = ySpeedOutputStar;
+      
+      zSpeedOutputStar = zSpeedOutputStar + (time_diff/timeConstVel)*(zSpeedOutput - zSpeedOutputStar);
+      zSpeedOutput = zSpeedOutputStar;
     }
     // If we've been flying and SWB is turned off, go through landing procedure
     else if (flying && !landed) {
-      xSpeedPID.set_desired_value(0);
-      ySpeedPID.set_desired_value(0);
+//      xSpeedPID.set_desired_value(0.0);
+//      ySpeedPID.set_desired_value(0.0);
+      xSpeedPID.set_desired_value(xPosOutput);
+      ySpeedPID.set_desired_value(yPosOutput);
       zSpeedPID.set_desired_value(-0.1);
 
       // speed controller inputs (current_speed, time_diff)
+      xSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
       xSpeedOutput = xSpeedPID.compute_PID(current_xspeed, time_diff);
-      
+
+      ySpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
       ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff); // IMU and CF define y opposite to the drone
   
       zSpeedOutput = zSpeedPID.compute_PID(current_zspeed, time_diff);
 
-      // If height less than 7cm, land
-      if (current_z < 0.07) {
+//      pidEMA.calcSx(xSpeedOutput);
+//      pidEMA.calcSy(ySpeedOutput);
+//      pidEMA.calcSz(zSpeedOutput);
+//
+//      xSpeedOutput = pidEMA.getSx();
+//      ySpeedOutput = pidEMA.getSy();
+//      zSpeedOutput = pidEMA.getSz();
+      
+      xSpeedOutputStar = xSpeedOutputStar + (time_diff/timeConstVel)*(xSpeedOutput - xSpeedOutputStar);
+      xSpeedOutput = xSpeedOutputStar;
+
+      ySpeedOutputStar = ySpeedOutputStar + (time_diff/timeConstVel)*(ySpeedOutput - ySpeedOutputStar);
+      ySpeedOutput = ySpeedOutputStar;
+      
+      zSpeedOutputStar = zSpeedOutputStar + (time_diff/timeConstVel)*(zSpeedOutput - zSpeedOutputStar);
+      zSpeedOutput = zSpeedOutputStar;
+
+      // If height less than 6cm, land
+      if (current_z < 0.06) {
         xSpeedOutput = 0.0;
         ySpeedOutput = 0.0;
         zSpeedOutput = -1;
@@ -749,24 +803,27 @@ void loop() {
     ySpeedOutput = ySpeedOutput*500.0 + 1500.0;
     zSpeedOutput = zSpeedOutput*500.0 + 1360.0;
 
+    if (send_pos) {
+      if (send_x) {
+        xpospid_data.data = xPosOutput;
+      }
+      if (send_y) {
+        ypospid_data.data = yPosOutput;
+      }
+      if (send_z) {
+        zpospid_data.data = zPosOutput;
+      }
+    }
+
     if (send_pid) {
       if (send_x) {
         xspeedpid_data.data = xSpeedOutput - 1500.0;  
-        if (send_pos) {
-          xpospid_data.data = xPosOutput;
-        }
       }
       if (send_y) {
         yspeedpid_data.data = ySpeedOutput - 1500.0;  
-        if (send_pos) {
-          ypospid_data.data = yPosOutput;
-        }
       } 
       if (send_z) {        
-        zspeedpid_data.data = zSpeedOutput - 1360.0;         
-        if (send_pos) {
-          zpospid_data.data = zPosOutput;
-        }
+        zspeedpid_data.data = zSpeedOutput - 1360.0;     
       }
     }
     
@@ -775,11 +832,6 @@ void loop() {
     old_PID_time = current_time;
 
 //    Serial.print("PID done at:\t"); Serial.println(millis() - old_loop_time);
-
-// The flow deck vx and vy are relative to drone's position, not world x and y frame. 
-//    // orientation conversion input (current angle) (desired angles taken from speed controllers already)
-//    float pitchOutput = positionController.compute_desired_pitch(current_pitch)*500 + 1500;
-//    float rollOutput = positionController.compute_desired_roll(current_roll)*500 + 1500;
 /***************************************************************************************/
 
 /***************************************************************************************/
@@ -805,37 +857,25 @@ void loop() {
 
         // Open the new file and write headers
         datalog = SPIFFS.open(file, FILE_APPEND);
-        datalog.print("Time\tXVelocity\tYVelocity\tZVelocity\tXPos\tYPos\tZPos\tXVelPID\tYVelPID\tZVelPID\tXPosPID\tYPosPID\tZPosPID");
+        datalog.print("Time\tXVelocity\tYVelocity\tZVelocity\tXPos\tYPos\tZPos\tXVelPID\tYVelPID\tZVelPID\tXPosPID\tYPosPID\tZPosPID\tXPosDes\tYPosDes\tZPosDes");
       }      
       automated_running = 1;
     }
 
     // Write data to our file if we haven't exceed max number of files in FS and we haven't used up all the space, should only write once every 0.1s
     if (condWriteToFile) {
-        // Format: Time, Xvel, Yvel, Zvel, XPos, YPos, ZPos, XvelPID, YvelPID, ZvelPID, XPosPID, YPosPID, ZPosPID, 
+        // Format: Time, Xvel, Yvel, Zvel, XPos, YPos, ZPos, XvelPID, YvelPID, ZvelPID, XPosPID, YPosPID, ZPosPID, XPosDes, YPosDes, ZPosDes
         String data2print = "\n" + String(micros() - start_time) + "\t" + String(current_xspeed, 5) + "\t" + String(current_yspeed, 5) + "\t" + String(current_zspeed, 5) + "\t" 
                             + String(current_x, 5) + "\t" + String(current_y, 5) + "\t" + String(current_z, 5) + "\t"
                             + String(xSpeedOutput, 5) + "\t" + String(ySpeedOutput, 5) + "\t" + String(zSpeedOutput, 5) + "\t"
-                            + String(xPosOutput, 5) + "\t" + String(yPosOutput, 5) + "\t" + String(zPosOutput, 5);
+                            + String(xPosOutput, 5) + "\t" + String(yPosOutput, 5) + "\t" + String(zPosOutput, 5) + "\t"
+                            + String(x_des, 2) +"\t" + String(y_des, 2) +"\t" + String(z_des, 2);
       
         datalog.print(data2print);
 
         old_write_time = micros();
     }
 /***************************************************************************************/
-
-
-//    set_outputs( rollOutput, pitchOutput, zOutput, desired_yaw, 1500, 2000 ); // last 2 values are armed and automated controls
-//    if ((iBus.readChannel(4) > 1600) && (iBus.readChannel(5) > 1600)) { 
-//      set_outputs( ySpeedOutput, xSpeedOutput, zSpeedOutput, iBus.readChannel(3), armed*iBus.readChannel(4), 1000, &channel_data[0] ); // last 2 values are armed and automated controls
-//    }
-//    else {
-//      set_outputs( iBus.readChannel(0), iBus.readChannel(1), iBus.readChannel(2), iBus.readChannel(3), armed*iBus.readChannel(4), 1000, &channel_data[0] ); // last 2 values are armed and automated controls
-//      // Reset integrals with switch
-//      xSpeedPID.reset_integral();
-//      ySpeedPID.reset_integral();
-//      zSpeedPID.reset_integral();
-//    }
   }
   
   // If we suspect the controller is lost, set all outputs to known safe values
@@ -870,7 +910,7 @@ void loop() {
 //          break;
 //        default:
 //          break;
-//      }
+//      }63
 //    }
 //    else Serial.println("Something else has happened");
 //
@@ -964,20 +1004,20 @@ void setCalibrationOffsets() {
   adafruit_bno055_offsets_t calibrationData;
   
   // Restore calibration data
-  calibrationData.accel_offset_x = 18;
-  calibrationData.accel_offset_y = 53;
-  calibrationData.accel_offset_z = -2;
+  calibrationData.accel_offset_x = -28;
+  calibrationData.accel_offset_y = 96;
+  calibrationData.accel_offset_z = -35;
   
-  calibrationData.mag_offset_x = 1404;
-  calibrationData.mag_offset_y = 140;
-  calibrationData.mag_offset_z = -2021;
+  calibrationData.mag_offset_x = 1954; // 1404
+  calibrationData.mag_offset_y = 197; // 140
+  calibrationData.mag_offset_z = -1625; // -2021
   
-  calibrationData.gyro_offset_x = 0;
-  calibrationData.gyro_offset_y = -2;
-  calibrationData.gyro_offset_z = -2;
+  calibrationData.gyro_offset_x = 1; // 0
+  calibrationData.gyro_offset_y = -2; // -2
+  calibrationData.gyro_offset_z = -2; // -2
   
-  calibrationData.accel_radius = 1000;
-  calibrationData.mag_radius = 627;
+  calibrationData.accel_radius = 1000; // 1000
+  calibrationData.mag_radius = 1005; // 627
 
   bno.setSensorOffsets(calibrationData);  
 }
@@ -986,10 +1026,11 @@ void setCalibrationOffsets() {
 /***************************************************************************************/
 /**************************Wifi stuff***************************************************/
 void connectToNetwork() {
-  const char* ssid = "test"; // Wifi network name
-  const char* password =  "abcdefg1"; // Wifi password
 //  const char* ssid = "SkyEye"; // Wifi network name
 //  const char* password =  "Team8wifi"; // Wifi password
+
+  const char* ssid = "test"; // Wifi network name
+  const char* password =  "abcdefg1"; // Wifi password
   
   WiFi.begin(ssid, password);
 
@@ -1009,11 +1050,6 @@ void connectToNetwork() {
 void beginSPIFFS () {
   Serial.println("Beginning SPIFF setup");
   SPIFFS.begin(true);
-
-  // Always write file data0 and leave blank so on start up this is the file that's overwritten
-  file = filename + String(filename_counter++) + filetype;
-  datalog = SPIFFS.open(file, FILE_WRITE);
-  datalog.close();
   
   Serial.println("Finished SPIFF setup");
 }
@@ -1024,17 +1060,21 @@ void beginSPIFFS () {
 void setupPIDControllers () {
   
   // Initial desired z position
-  x_des = 1;
-  y_des = 1;
-  z_des = 0.4;
+  x_des = 1.56;
+  y_des = 0.53;
+  z_des = 0.5;
 
   // Initial PID controller constants
-  float ini_xy_speed_pid [3] = {0.12, 0.062, 0.0};
-  ini_z_speed_pid[0] = 0.55; ini_z_speed_pid[1] = 0.65; ini_z_speed_pid[2] = 0.0002;
-  float ini_xy_pos_pid [3] = {0.43, 0.045, 0};
-  float ini_z_pos_pid [3] = {0.55, 0.03, 0};
+  // Speed
+  float ini_x_speed_pid [3] = {0.088, 0.032, 0.05};
+  float ini_y_speed_pid [3] = {0.085, 0.034, 0.052};
+  ini_z_speed_pid[0] = 0.42; ini_z_speed_pid[1] = 0.55; ini_z_speed_pid[2] = 0.06;
+  // Position
+  float ini_x_pos_pid [3] = {0.35, 0.022, 0.01};
+  float ini_y_pos_pid [3] = {0.3, 0.025, 0.01};
+  float ini_z_pos_pid [3] = {0.45, 0.032, 0.005};
   
-  // Change tuning values - PID_TUNING 0-zvel, 1-zpos, 2-xyvel, 3-xypos
+  // Change tuning values - PID_TUNING 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xpos
   for (int i = 0; i<3; i++) {
     switch (PID_TUNING) {
       case 0:
@@ -1044,41 +1084,46 @@ void setupPIDControllers () {
                 tuning_data[i] =  ini_z_pos_pid[i]; 
                 break;
       case 2:
-                tuning_data[i] =  ini_xy_speed_pid[i]; 
+                tuning_data[i] =  ini_x_speed_pid[i]; 
                 break;
       case 3:
-                tuning_data[i] =  ini_xy_pos_pid[i]; 
+                tuning_data[i] =  ini_y_speed_pid[i]; 
+                break;
+      case 4:
+                tuning_data[i] =  ini_x_pos_pid[i]; 
                 break;
       default:
                 break;
     }
-//    tuning_data[i] =  ini_z_speed_pid[i];
-//    tuning_data[i] =  ini_z_pos_pid[i]; 
-//    tuning_data[i] =  ini_xy_speed_pid[i]; 
-//    tuning_data[i] =  ini_xy_pos_pid[i]; 
   }
   
-  xPosPID.set_PID_constants(ini_xy_pos_pid[0], ini_xy_pos_pid[1], ini_xy_pos_pid[2]);
+  xPosPID.set_PID_constants(ini_x_pos_pid[0], ini_x_pos_pid[1], ini_x_pos_pid[2]);
   xPosPID.set_desired_value(x_des);
   xPosPID.saturate_integral(false, 0);
-  yPosPID.set_PID_constants(ini_xy_pos_pid[0], ini_xy_pos_pid[1], ini_xy_pos_pid[2]);
+  
+  yPosPID.set_PID_constants(ini_y_pos_pid[0], ini_y_pos_pid[1], ini_y_pos_pid[2]);
   yPosPID.set_desired_value(y_des);
   yPosPID.saturate_integral(false, 0);
+  
   zPosPID.set_PID_constants(ini_z_pos_pid[0], ini_z_pos_pid[1], ini_z_pos_pid[2]);
   zPosPID.set_desired_value(z_des);
   zPosPID.saturate_integral(false, 0);
-  xSpeedPID.set_PID_constants(ini_xy_speed_pid[0], ini_xy_speed_pid[1], ini_xy_speed_pid[2]);
+  
+  xSpeedPID.set_PID_constants(ini_x_speed_pid[0], ini_x_speed_pid[1], ini_x_speed_pid[2]);
   xSpeedPID.set_desired_value(0.0);
   xSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
   xSpeedPID.saturate_integral(false, 0);
-  ySpeedPID.set_PID_constants(ini_xy_speed_pid[0], ini_xy_speed_pid[1], ini_xy_speed_pid[2]);
+  
+  ySpeedPID.set_PID_constants(ini_y_speed_pid[0], ini_y_speed_pid[1], ini_y_speed_pid[2]);
   ySpeedPID.set_desired_value(0.0);
   ySpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
   ySpeedPID.saturate_integral(false, 0);
+  
   zSpeedPID.set_PID_constants(ini_z_speed_pid[0], ini_z_speed_pid[1], ini_z_speed_pid[2]);
   zSpeedPID.set_desired_value(0);
   zSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
   zSpeedPID.saturate_integral(false, 150);
+  
   yawPosPID.set_PID_constants(0,0,0);
   yawPosPID.set_desired_value(0.0); 
   yawPosPID.saturate_integral(false, 0); 
