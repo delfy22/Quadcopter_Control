@@ -333,7 +333,6 @@ void loop() {
   static EMA accelEMA(0.5);
   static EMA CFEMA(0.15);
   static EMA velEMA(0.15);
-  static EMA pidEMA(0.7);
   
   static imu::Vector<3> accels;
   static imu::Vector<3> orient;
@@ -676,7 +675,7 @@ void loop() {
     float timeConstVel = 0.1;
     float timeConstPos = 0.2;
 
-    static bool takeoff = 0;
+    static bool landing = 0;
 
     static unsigned long current_time;
     current_time = micros();
@@ -690,110 +689,76 @@ void loop() {
         pos_PID_time = current_time - 2;
         old_PID_time = current_time - 2;
         flying = 1;
-
-        // DO EMA's
-//        pidEMA.setSx(0);
-//        pidEMA.setSy(0);
-//        pidEMA.setSz(0);
+        landing = 0;
       }
-
-      // Calculate time difference for position PID controllers 
-      time_diff = (current_time - pos_PID_time)/1000000.0;
-
-      // Position PID controllers running at set rate
-      if (time_diff > PID_SAMPLE_TIME) {
-        // position controller inputs (current_pos, time_diff)
-        xPosOutput = xPosPID.compute_PID(current_x, time_diff);
-        yPosOutput = yPosPID.compute_PID(current_y, time_diff);
-        zPosOutput = zPosPID.compute_PID(current_z, time_diff);
-  //      yawPosOutput = yawPosPID.compute_PID(current_yaw, time_diff);
-        pos_PID_time = current_time;
-
-        zPosOutputStar = zPosOutputStar + (time_diff/timeConstPos)*(zPosOutput - zPosOutputStar);
-        zPosOutput = zPosOutputStar;
-      }
-  
-      // NOTE: We'll need to take account of the yaw to convert output from position controllers to input for velocity controllers
-      
-      // Calculate time difference for speed PID controllers
-      current_time = micros();
-      time_diff = (current_time - old_PID_time)/1000000.0; 
-
-      xSpeedPID.set_desired_value(xPosOutput);
-      ySpeedPID.set_desired_value(yPosOutput);
-      zSpeedPID.set_desired_value(zPosOutput);  
-  
-      // speed controller inputs (current_speed, time_diff)
-      xSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
-      xSpeedOutput = xSpeedPID.compute_PID(current_xspeed, time_diff);
-      
-      ySpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
-      ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff); // IMU and CF define y opposite to the drone
-  
-      zSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
-      zSpeedOutput = zSpeedPID.compute_PID(current_zspeed, time_diff);
-
-//      pidEMA.calcSx(xSpeedOutput);
-//      pidEMA.calcSy(ySpeedOutput);
-//      pidEMA.calcSz(zSpeedOutput);
-//
-//      xSpeedOutput = pidEMA.getSx();
-//      ySpeedOutput = pidEMA.getSy();
-//      zSpeedOutput = pidEMA.getSz();
-      
-      xSpeedOutputStar = xSpeedOutputStar + (time_diff/timeConstVel)*(xSpeedOutput - xSpeedOutputStar);
-      xSpeedOutput = xSpeedOutputStar;
-
-      ySpeedOutputStar = ySpeedOutputStar + (time_diff/timeConstVel)*(ySpeedOutput - ySpeedOutputStar);
-      ySpeedOutput = ySpeedOutputStar;
-      
-      zSpeedOutputStar = zSpeedOutputStar + (time_diff/timeConstVel)*(zSpeedOutput - zSpeedOutputStar);
-      zSpeedOutput = zSpeedOutputStar;
     }
     // If we've been flying and SWB is turned off, go through landing procedure
     else if (flying && !landed) {
-//      xSpeedPID.set_desired_value(0.0);
-//      ySpeedPID.set_desired_value(0.0);
+      landing = 1;
+      // If height less than 6cm, land
+      if (current_z < 0.06) {
+        landed = 1;
+      }      
+    }
+
+    // Calculate time difference for position PID controllers 
+    time_diff = (current_time - pos_PID_time)/1000000.0;
+
+    // Position PID controllers running at set rate
+    if (time_diff > PID_SAMPLE_TIME) {
+      // position controller inputs (current_pos, time_diff)
+      xPosOutput = xPosPID.compute_PID(current_x, time_diff);
+      yPosOutput = yPosPID.compute_PID(current_y, time_diff);
+      zPosOutput = zPosPID.compute_PID(current_z, time_diff);
+//      yawPosOutput = yawPosPID.compute_PID(current_yaw, time_diff);
+      pos_PID_time = current_time;
+
+      zPosOutputStar = zPosOutputStar + (time_diff/timeConstPos)*(zPosOutput - zPosOutputStar);
+      zPosOutput = zPosOutputStar;
+    }
+
+    if (landing) {
       xSpeedPID.set_desired_value(xPosOutput);
       ySpeedPID.set_desired_value(yPosOutput);
       zSpeedPID.set_desired_value(-0.1);
+    }
+    else if (flying) {
+      xSpeedPID.set_desired_value(xPosOutput);
+      ySpeedPID.set_desired_value(yPosOutput);
+      zSpeedPID.set_desired_value(zPosOutput);  
+    }
 
+    if (!landed && flying) {    
+      // Calculate time difference for speed PID controllers
+      current_time = micros();
+      time_diff = (current_time - old_PID_time)/1000000.0; 
+    
       // speed controller inputs (current_speed, time_diff)
       xSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
       xSpeedOutput = xSpeedPID.compute_PID(current_xspeed, time_diff);
-
+      
       ySpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
       ySpeedOutput = -ySpeedPID.compute_PID(current_yspeed, time_diff); // IMU and CF define y opposite to the drone
-  
+    
+      zSpeedPID.limit_des_val(LOWER_SPEED_LIMIT, UPPER_SPEED_LIMIT);
       zSpeedOutput = zSpeedPID.compute_PID(current_zspeed, time_diff);
-
-//      pidEMA.calcSx(xSpeedOutput);
-//      pidEMA.calcSy(ySpeedOutput);
-//      pidEMA.calcSz(zSpeedOutput);
-//
-//      xSpeedOutput = pidEMA.getSx();
-//      ySpeedOutput = pidEMA.getSy();
-//      zSpeedOutput = pidEMA.getSz();
+      
       
       xSpeedOutputStar = xSpeedOutputStar + (time_diff/timeConstVel)*(xSpeedOutput - xSpeedOutputStar);
       xSpeedOutput = xSpeedOutputStar;
-
+    
       ySpeedOutputStar = ySpeedOutputStar + (time_diff/timeConstVel)*(ySpeedOutput - ySpeedOutputStar);
       ySpeedOutput = ySpeedOutputStar;
       
       zSpeedOutputStar = zSpeedOutputStar + (time_diff/timeConstVel)*(zSpeedOutput - zSpeedOutputStar);
       zSpeedOutput = zSpeedOutputStar;
-
-      // If height less than 6cm, land
-      if (current_z < 0.06) {
-        xSpeedOutput = 0.0;
-        ySpeedOutput = 0.0;
-        zSpeedOutput = -1;
-        landed = 1;
-      }      
     }
     // If we've landed, don't do anything until we've been back into manual mode
     else {
+      xSpeedPID.set_desired_value(0);
+      ySpeedPID.set_desired_value(0);
+      zSpeedPID.set_desired_value(0);
+      
       xSpeedOutput = 0.0;
       ySpeedOutput = 0.0;
       zSpeedOutput = -1;
@@ -1066,13 +1031,13 @@ void setupPIDControllers () {
 
   // Initial PID controller constants
   // Speed
-  float ini_x_speed_pid [3] = {0.088, 0.032, 0.05};
-  float ini_y_speed_pid [3] = {0.085, 0.034, 0.052};
-  ini_z_speed_pid[0] = 0.42; ini_z_speed_pid[1] = 0.55; ini_z_speed_pid[2] = 0.06;
+  float ini_x_speed_pid [3] = {0.084, 0.03, 0.05};
+  float ini_y_speed_pid [3] = {0.086, 0.036, 0.05};
+  ini_z_speed_pid[0] = 0.4; ini_z_speed_pid[1] = 0.53; ini_z_speed_pid[2] = 0.055;
   // Position
-  float ini_x_pos_pid [3] = {0.35, 0.022, 0.01};
-  float ini_y_pos_pid [3] = {0.3, 0.025, 0.01};
-  float ini_z_pos_pid [3] = {0.45, 0.032, 0.005};
+  float ini_x_pos_pid [3] = {0.3, 0.027, 0.01};
+  float ini_y_pos_pid [3] = {0.3, 0.027, 0.01};
+  float ini_z_pos_pid [3] = {0.45, 0.032, 0.004};
   
   // Change tuning values - PID_TUNING 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xpos
   for (int i = 0; i<3; i++) {
