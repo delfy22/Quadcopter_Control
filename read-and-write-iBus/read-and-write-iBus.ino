@@ -39,10 +39,10 @@
 #define LOWER_SPEED_LIMIT -0.2  // Limit speed going to speed controllers
 #define UPPER_SPEED_LIMIT 0.2   // Limit speed going to speed controllers
 
-#define PID_TUNING 2 // 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xypos
+#define PID_TUNING 1 // 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xypos
 
 // Choose ROS topics
-bool send_vel   = 0;
+bool send_vel   = 1;
 bool send_pos   = 0;
 bool send_acc   = 1;
 bool send_x     = 0;
@@ -89,9 +89,9 @@ static float CF_Vel [3];
 static float CF_Pos [3];
 static float CF_Yaw;
 static float tuning_data [3];
-static float x_des;
-static float y_des;
-static float z_des;
+static float x_des; static float x_des_ini; 
+static float y_des; static float y_des_ini;
+static float z_des; static float z_des_ini;
 static bool tuning_params_changed = 0;
 static bool new_CF_Data = 0;
 
@@ -125,14 +125,17 @@ void sub_cb_kdtuning (const std_msgs::Float32& data_rec) {
 
 void sub_cb_xdes (const std_msgs::Float32& data_rec) {
   x_des = data_rec.data;
+  x_des_ini = data_rec.data; 
   tuning_params_changed = 1;
 }
 void sub_cb_ydes (const std_msgs::Float32& data_rec) {
   y_des = data_rec.data;
+  y_des_ini = data_rec.data; 
   tuning_params_changed = 1;
 }
 void sub_cb_zdes (const std_msgs::Float32& data_rec) {
   z_des = data_rec.data;
+  z_des_ini = data_rec.data; 
   tuning_params_changed = 1;
 }
 
@@ -331,8 +334,7 @@ void loop() {
   static float yaw = 0.0;
   
   static EMA accelEMA(0.5);
-  static EMA CFEMA(0.15);
-  static EMA velEMA(0.15);
+  static EMA velEMA(0.2);
   
   static imu::Vector<3> accels;
   static imu::Vector<3> orient;
@@ -350,6 +352,7 @@ void loop() {
   static uint8_t errorType = 0;
   static bool landed = 0;
   static bool flying = 0;
+  static bool landing = 0;
   
   remote_lost = 0;
   errorType = 0;
@@ -497,13 +500,6 @@ void loop() {
   
   if (new_CF_Data) {
     if (useCF) {
-//      velocities[0] = CF_Vel[0];
-//      velocities[1] = CF_Vel[1];
-//      velocities[2] = CF_Vel[2];
-//      
-//      velEMA.setSx(velocities[0]);
-//      velEMA.setSy(velocities[1]);
-//      velEMA.setSz(velocities[2]);
 
       velEMA.calcSx(CF_Vel[0]);
       velEMA.calcSy(CF_Vel[1]);
@@ -522,10 +518,15 @@ void loop() {
   }
 
   time_diff = (micros() - CF_Read_Time)/1000000.0;
-  
-  // check if we haven't had CF data for at least a second, if so disarm drone.
-  if (time_diff > 1) { 
+
+  // Check if we haven't had CF data for at least 3 seconds, if so disarm drone.
+  if (time_diff > 3) { 
     armed = 0;
+    errorType = 4;
+  }
+  // If we haven't had CF data for more than half a second, begin landing procedure.
+  else if (time_diff > 0.5) { 
+    landing = 1;
     errorType = 4;
   }
   
@@ -551,7 +552,6 @@ void loop() {
     // NOTE: SORT OUT AUTOMATIC CALIBRATION OF IMU
     // Integrate using filtered accelerations and trapezium integration
     if (useIMU) {
-
       float temp1 = velocities[0] + (accelEMA.getSx() + accelEMA.getOldSx())*time_diff/2;
       float temp2 = velocities[1] + (accelEMA.getSy() + accelEMA.getOldSy())*time_diff/2;
       float temp3 = velocities[2] + (accelEMA.getSz() + accelEMA.getOldSz())*time_diff/2;
@@ -587,6 +587,24 @@ void loop() {
     iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send safe outputs immediately
     if(displayStatus) Serial.println("TOO FAST!");
     errorType = 3;
+  }
+
+  if ( isnan(velocities[0]) || isnan(velocities[1]) || isnan(velocities[2]) ) {
+    remote_lost = 1; // If speeds are too high, assume the drone is lost and kill the power
+    armed = 0;
+    set_safe_outputs(&channel_data[0]);
+    iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send safe outputs immediately
+    if(displayStatus) Serial.println("NAN!");
+    errorType = 5;
+  }
+
+  if ( (CF_Pos[0] > 3) || (CF_Pos[1] > 3) ) {
+    remote_lost = 1; // If speeds are too high, assume the drone is lost and kill the power
+    armed = 0;
+    set_safe_outputs(&channel_data[0]);
+    iBus.write_one_frame(channel_data, channel_count, iBus_serial); // Send safe outputs immediately
+    if(displayStatus) Serial.println("Incorrect Position");
+    errorType = 6;
   }
 
 //  Serial.print("IMU done at:\t"); Serial.println(millis() - old_loop_time);
@@ -672,10 +690,8 @@ void loop() {
     static float ySpeedOutputStar = 0.0;
     static float zSpeedOutputStar = -0.8;
     static float zPosOutputStar = 0;
-    float timeConstVel = 0.1;
+    float timeConstVel = 0.14;
     float timeConstPos = 0.2;
-
-    static bool landing = 0;
 
     static unsigned long current_time;
     current_time = micros();
@@ -690,13 +706,26 @@ void loop() {
         old_PID_time = current_time - 2;
         flying = 1;
         landing = 0;
+
+        x_des = x_des_ini;  xPosPID.set_desired_value(x_des);
+        y_des = y_des_ini;  yPosPID.set_desired_value(y_des);
+        z_des = z_des_ini;  zPosPID.set_desired_value(z_des);
       }
     }
     // If we've been flying and SWB is turned off, go through landing procedure
     else if (flying && !landed) {
+      z_des = 0;
+      zPosPID.set_desired_value(z_des);
+      
       landing = 1;
+      
       // If height less than 6cm, land
       if (current_z < 0.06) {
+        x_des = 0;
+        xPosPID.set_desired_value(x_des);
+        y_des = 0;
+        yPosPID.set_desired_value(y_des);
+        
         landed = 1;
       }      
     }
@@ -718,15 +747,12 @@ void loop() {
     }
 
     if (landing) {
-      xSpeedPID.set_desired_value(xPosOutput);
-      ySpeedPID.set_desired_value(yPosOutput);
-      zSpeedPID.set_desired_value(-0.1);
+      zPosOutput = -0.1;
     }
-    else if (flying) {
-      xSpeedPID.set_desired_value(xPosOutput);
-      ySpeedPID.set_desired_value(yPosOutput);
-      zSpeedPID.set_desired_value(zPosOutput);  
-    }
+    
+    xSpeedPID.set_desired_value(xPosOutput);
+    ySpeedPID.set_desired_value(yPosOutput);
+    zSpeedPID.set_desired_value(zPosOutput);  
 
     if (!landed && flying) {    
       // Calculate time difference for speed PID controllers
@@ -762,6 +788,10 @@ void loop() {
       xSpeedOutput = 0.0;
       ySpeedOutput = 0.0;
       zSpeedOutput = -1;
+
+      xPosOutput = 0;
+      yPosOutput = 0;
+      zPosOutput = 0;
     }
 
     xSpeedOutput = xSpeedOutput*500.0 + 1500.0;
@@ -1024,20 +1054,24 @@ void beginSPIFFS () {
 /******************************PID Initialisation***************************************/
 void setupPIDControllers () {
   
-  // Initial desired z position
-  x_des = 1.56;
-  y_des = 0.53;
+  // Initial desired position
+  x_des = 1.0;
+  y_des = 1.0;
   z_des = 0.5;
+
+  x_des_ini = x_des;
+  y_des_ini = y_des;
+  z_des_ini = z_des;
 
   // Initial PID controller constants
   // Speed
-  float ini_x_speed_pid [3] = {0.084, 0.03, 0.05};
-  float ini_y_speed_pid [3] = {0.086, 0.036, 0.05};
-  ini_z_speed_pid[0] = 0.4; ini_z_speed_pid[1] = 0.53; ini_z_speed_pid[2] = 0.055;
+  float ini_x_speed_pid [3] = {0.25, 0.11, 0.12};
+  float ini_y_speed_pid [3] = {0.25, 0.11, 0.12}; 
+  ini_z_speed_pid[0] = 0.43; ini_z_speed_pid[1] = 0.53; ini_z_speed_pid[2] = 0.16;
   // Position
-  float ini_x_pos_pid [3] = {0.3, 0.027, 0.01};
-  float ini_y_pos_pid [3] = {0.3, 0.027, 0.01};
-  float ini_z_pos_pid [3] = {0.45, 0.032, 0.004};
+  float ini_x_pos_pid [3] = {0.32, 0.045, 0.0};
+  float ini_y_pos_pid [3] = {0.32, 0.045, 0.0};
+  float ini_z_pos_pid [3] = {0.43, 0.032, 0.004};
   
   // Change tuning values - PID_TUNING 0-zvel, 1-zpos, 2-xvel, 3-yvel, 4-xpos
   for (int i = 0; i<3; i++) {
