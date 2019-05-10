@@ -3,73 +3,31 @@
 
 class PID {
   public:
-    // Prototype to set and get desired values
-    void set_desired_values(float x_des, float y_des, float z_des, float yaw_des);
+    // Constructor
+    PID () : kp(0.0), ki(0.0), kd(0.0), I_e(0.0), D(0.0), old_val(0.0), des(0.0), output(0.0), sat_limit(0.0), saturate_int(0) {}
     
-    // Prototypes to set PID parameters
-    void set_x_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_y_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_z_constants(float kp, float ki, float kd, float I_e, float D);
-    void set_xspeed_constant(float kp);
-    void set_yspeed_constant(float kp);
-    void set_zspeed_constant(float kp);
+    // Prototype to set PID parameters
+    void set_PID_constants (float kp_in, float ki_in, float kd_in);
+    void set_desired_value (float des_in);
+    void limit_des_val (float lower_lim, float upper_lim);
+    void reset_integral ();
+    void saturate_integral (bool sat, float sat_lim);
+    float get_PID_val (uint8_t sel);
 
-    // Prototypes to convert linear to angular
-    float compute_desired_pitch (float current_psi);
-    float compute_desired_roll (float current_psi);
-
-    // Prototypes to calculate PID outputs
-    float compute_x_PID (float current_x, float time_diff);
-    float compute_y_PID (float current_y, float time_diff);
-    float compute_z_PID (float current_z, float time_diff);
-    float compute_xspeed_PID (float current_xspeed, float desired_xspeed, float time_diff);
-    float compute_yspeed_PID (float current_yspeed, float desired_yspeed, float time_diff);
-    float compute_zspeed_PID (float current_zspeed, float desired_zspeed, float time_diff);
-    
+    // Prototype to calculate PID outputs
+    float compute_PID (float current_val, float time_diff);
 
   private:
-
-    static constexpr float max_roll_angle = 8;
-    static constexpr float max_tilt_angle = 8;
-    static constexpr float max_horiz_speed = 0.01; // Limit x and y speed to 0.01ms
-    static constexpr float max_vert_speed = 0.01; // Limit z speed to 0.01ms
-
-    float desired_x;
-    float desired_y;
-    float desired_z;
-    float desired_yaw;
-    
-    float kp_x;
-    float ki_x;
-    float kd_x; 
-    float I_e_x;
-    float D_x;
-    float old_x;
-    float x_output;
-    
-    float kp_y; 
-    float ki_y;
-    float kd_y; 
-    float I_e_y;
-    float D_y;
-    float old_y;
-    float y_output;
-    
-    float kp_z; 
-    float ki_z;
-    float kd_z; 
-    float I_e_z;
-    float D_z;
-    float old_z;
-    float z_output;
-
-    float xspeed_output;
-    float kp_xspeed;
-
-    float yspeed_output;
-    float kp_yspeed;
-
-    float zspeed_output;
-    float kp_zspeed;
+    float kp;
+    float ki;
+    float kd; 
+    float e;
+    float I_e;
+    float D;
+    float old_val;
+    float des;
+    float output;
+    float sat_limit;
+    bool  saturate_int;
 };
 

@@ -15,6 +15,7 @@ FlySkyIBus iBus;
 void FlySkyIBus::begin(HardwareSerial& serial)
 {
 	serial.begin(115200, SERIAL_8N1, 15, 25);
+  Serial.println("Finished serial");
 	begin((Stream&)serial);
 }
 
@@ -29,8 +30,11 @@ void FlySkyIBus::begin(Stream& stream)
 	this->lchksum = 0;
 }
 
-void FlySkyIBus::read_loop(void)
+bool FlySkyIBus::read_loop(void)
 {
+  bool noData = 1;
+  if (stream->available()) noData = 0;
+  
 	while (stream->available() > 0)
 	{
 		uint32_t now = millis();
@@ -98,6 +102,7 @@ void FlySkyIBus::read_loop(void)
 			break;
 		}
 	}
+ return noData;
 }
 
 uint16_t FlySkyIBus::readChannel(uint8_t channelNr)
@@ -152,13 +157,6 @@ void FlySkyIBus::write_one_frame(uint16_t *channel_data, uint8_t channel_count, 
 	// Write the IBus checksum to the buffer
 	serial_buffer[buffer_index++] = (ibus_checksum & 0xFF);
 	serial_buffer[buffer_index++] = ((ibus_checksum >> 8) & 0xFF);
-
-
-//	 // To debug the frame sent
-//		  int elementCount = sizeof(serial_buffer) / sizeof(serial_buffer[0]);
-//		  for(int i = 0; i<elementCount; i++) {
-//		    Serial.println(serial_buffer[i],HEX);
-//		  }
 
 	// Write the buffer to the Serial pin
 	serial.write(serial_buffer, buffer_index);

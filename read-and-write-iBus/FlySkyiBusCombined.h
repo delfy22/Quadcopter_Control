@@ -17,7 +17,7 @@ class FlySkyIBus {
 public:
 	void begin(HardwareSerial& serial);
 	void begin(Stream& stream);
-	void read_loop(void);
+	bool read_loop(void);
 	uint16_t readChannel(uint8_t channelNr);
 	void write_one_frame(uint16_t *channel_data, uint8_t channel_count, HardwareSerial& serial);
 
